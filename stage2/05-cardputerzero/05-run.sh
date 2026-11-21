@@ -11,3 +11,6 @@ fi
 on_chroot << 'CHROOT'
 systemctl disable fb_load.service
 CHROOT
+on_chroot << 'CHROOT'
+systemctl enable lcd-console.service
+CHROOT

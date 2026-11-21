@@ -8,7 +8,7 @@ IMG=${CZ_SPLASH_IMG:-/usr/share/cz/cz-splash.rgb565}
 PING=${CZ_SPLASH_PING:-/usr/share/cz/cz-ping.wav}
 CZ_FONT=${CZ_FONT:-/usr/share/consolefonts/Lat15-Terminus12x6.psf.gz}
 MIN_SHOW=${CZ_SPLASH_MIN:-3}
-MAX_WAIT=${CZ_SPLASH_MAX:-25}
+MAX_WAIT=${CZ_SPLASH_MAX:-15}
 
 # KDSETMODE: graphics stops fbcon rendering (image stays); text restores it for getty.
 vtmode() {
@@ -17,7 +17,7 @@ fd=os.open("/dev/tty1",os.O_RDWR)
 fcntl.ioctl(fd,0x4B3A,1 if sys.argv[1]=="g" else 0)
 os.close(fd)' "$1" 2>/dev/null
 }
-trap 'vtmode t; setfont -C /dev/tty1 "$CZ_FONT" 2>/dev/null' EXIT
+trap 'vtmode t; setfont -C /dev/tty1 "$CZ_FONT" 2>/dev/null' EXIT TERM INT
 
 start=$(date +%s)
 vtmode g
@@ -33,7 +33,7 @@ amixer -c ES8389Audio sset Speaker on >/dev/null 2>&1
 amixer -c ES8389Audio sset DACL 80% >/dev/null 2>&1
 amixer -c ES8389Audio sset DACR 80% >/dev/null 2>&1
 aplay -q "$PING" 2>/dev/null
-logger -t cz-splash "ping rc=$? pcm=$( [ -e /dev/snd/pcmC0D0p ] && echo present || echo missing )"
+echo "ping rc=$? pcm=$( [ -e /dev/snd/pcmC0D0p ] && echo present || echo missing )" >&2
 
 # Hold until logins are permitted, but at least MIN_SHOW and at most MAX_WAIT.
 while :; do

@@ -11,9 +11,10 @@ build*.log
 
 # Temporary scripts
 preflight.sh
-01-run.sh
 
 # Build artifacts
 deploy/
 work/
 rootfs/
+/config
+/01-run.sh
