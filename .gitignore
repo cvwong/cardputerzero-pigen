@@ -1,9 +1,19 @@
-deploy/*
-work/*
-config
-postrun.sh
-SKIP
-SKIP_IMAGES
-.pc
-*-pc
-.vscode/
+# Build logs
+build*.log
+*.log
+
+# Backup/orig files
+*.orig
+*.disabled
+
+# Qwen directory
+.qwen/
+
+# Temporary scripts
+preflight.sh
+01-run.sh
+
+# Build artifacts
+deploy/
+work/
+rootfs/

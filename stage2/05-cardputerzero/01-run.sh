@@ -42,3 +42,4 @@ depmod -a "${KVER}"
 rm -rf /tmp/dtoverlays
 
 CHROOT
+install -D -m 0755 files/cz-font "${ROOTFS_DIR}/usr/local/bin/cz-font"

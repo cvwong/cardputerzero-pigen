@@ -1,5 +1,5 @@
 #!/bin/bash -e
-
+echo "nameserver 192.168.52.248" > "${ROOTFS_DIR}/etc/resolv.conf"
 true > "${ROOTFS_DIR}/etc/apt/sources.list"
 install -m 644 files/debian.sources "${ROOTFS_DIR}/etc/apt/sources.list.d/"
 install -m 644 files/raspi.sources "${ROOTFS_DIR}/etc/apt/sources.list.d/"

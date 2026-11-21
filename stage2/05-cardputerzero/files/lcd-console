@@ -1,0 +1,73 @@
+#!/bin/bash
+# CardputerZero v5 — bind the text console to the built-in 320x170 panel.
+# The panel driver registers ~14 s into boot, so poll for it.
+set -u
+
+find_panel() {
+    for d in /sys/class/graphics/fb[0-9]*; do
+        [ -r "$d/virtual_size" ] || continue
+        case "$(cat "$d/virtual_size")" in
+            320,170|170,320) echo "${d##*/fb}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+LCD=""
+for _ in $(seq 1 300); do
+    LCD=$(find_panel) && break
+    sleep 0.2
+done
+
+if [ -n "$LCD" ]; then
+    con2fbmap 1 "$LCD" 2>/dev/null || true
+
+    HDMI=""
+    for d in /sys/class/graphics/fb[0-9]*; do
+        idx=${d##*/fb}
+        [ "$idx" = "$LCD" ] && continue
+        HDMI=$idx
+        break
+    done
+
+    if [ -n "$HDMI" ]; then
+        for tty in 2 3 4 5 6; do con2fbmap "$tty" "$HDMI" 2>/dev/null || true; done
+        echo "lcd-console: tty1->fb$LCD (LCD), tty2-6->fb$HDMI (HDMI)"
+    else
+        for tty in 2 3 4 5 6; do con2fbmap "$tty" "$LCD" 2>/dev/null || true; done
+        echo "lcd-console: all VTs->fb$LCD (no HDMI framebuffer)"
+    fi
+else
+    echo "lcd-console: no 320x170 framebuffer after 60 s" >&2
+fi
+
+for _ in $(seq 1 50); do
+    found=0
+    for bl in /sys/class/backlight/*; do
+        [ -w "$bl/brightness" ] || continue
+        found=1
+        cat "$bl/max_brightness" > "$bl/brightness"
+    done
+    [ "$found" = 1 ] && break
+    sleep 0.2
+done
+
+setterm --blank 0 --powerdown 0 --term linux < /dev/tty1 > /dev/tty1 2>/dev/null || true
+
+# Console font (bitmap PSF; fbcon cannot use scalable fonts)
+CZ_FONT=${CZ_FONT:-/usr/share/consolefonts/Lat15-Terminus12x6.psf.gz}
+if [ -r "$CZ_FONT" ]; then
+    for t in 1 2 3 4 5 6; do
+        setfont -C "/dev/tty$t" "$CZ_FONT" 2>/dev/null || true
+    done
+fi
+
+# Console font: Terminus 6x12 -> 53 cols x 14 rows on the 320x170 panel.
+CZ_FONT=${CZ_FONT:-/usr/share/consolefonts/Lat15-Terminus12x6.psf.gz}
+if [ -r "$CZ_FONT" ]; then
+    for t in 1 2 3 4 5 6; do
+        setfont -C "/dev/tty$t" "$CZ_FONT" 2>/dev/null || true
+    done
+fi
+
+exit 0

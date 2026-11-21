@@ -1,0 +1,12 @@
+[Unit]
+Description=Bind Linux text console to the CardputerZero LCD
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=90
+ExecStart=/usr/local/sbin/lcd-console
+
+[Install]
+WantedBy=multi-user.target
