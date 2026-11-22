@@ -1,0 +1,75 @@
+#!/bin/bash
+# cz-firstboot — themed first-boot account creation on tty1 (runs once)
+set -u
+FLAG=/var/lib/cz/firstboot-done
+[ -e "$FLAG" ] && exit 0
+
+C=$'\e[36m'; B=$'\e[1m'; R=$'\e[0m'; DIM=$'\e[2m'; RED=$'\e[31m'
+W=48
+printf '\e[2J\e[H\e[?25l'
+
+row() { printf '  %s\n' "$1"; }
+
+draw() {
+    printf '\e[2J\e[H'
+    row ""
+    row "${B}${C}CARDPUTER ZERO${R}  ·  first setup"
+    row ""
+    row "Create the account you'll log in with."
+    row ""
+}
+
+ask_user() {
+    while :; do
+        draw
+        row "  ${DIM}lowercase letters, digits, - and _${R}"
+        row ""
+        printf '  Username: '; printf '\e[?25h'
+        read -r U || continue
+        printf '\e[?25l'
+        if [[ "$U" =~ ^[a-z][-a-z0-9_]{0,30}$ ]]; then return; fi
+        row ""; row "  ${RED}invalid name - try again${R}"; sleep 2
+    done
+}
+
+ask_pass() {
+    while :; do
+        draw
+        row "  Username: ${B}${U}${R}"
+        row ""
+        printf '  Password (min 8): '; printf '\e[?25h'
+        read -rs P1; echo
+        printf '  Confirm password: '
+        read -rs P2; echo; printf '\e[?25l'
+        if [ ${#P1} -ge 8 ] && [ "$P1" = "$P2" ]; then return; fi
+        row ""; row "  ${RED}too short or mismatch${R}"; sleep 2
+    done
+}
+
+ask_user
+ask_pass
+
+draw
+row "  Creating ${B}${U}${R} ..."
+printf '\e[%s;1H' 12
+
+BASE=$(getent passwd 1000 | cut -d: -f1)
+if [ -n "$BASE" ] && [ "$BASE" != "$U" ]; then
+    usermod -l "$U" -d "/home/$U" -m "$BASE" 2>/dev/null
+    groupmod -n "$U" "$BASE" 2>/dev/null
+fi
+for g in sudo adm dialout audio video plugdev input netdev gpio i2c spi; do
+    getent group "$g" >/dev/null && usermod -aG "$g" "$U"
+done
+printf '%s:%s\n' "$U" "$P1" | chpasswd
+unset P1 P2
+
+install -d -m 755 /var/lib/cz
+: > "$FLAG"
+
+draw
+row "  ${B}Done.${R} Rebooting..."
+row ""
+printf '\e[?25h'
+sleep 2
+systemctl reboot
