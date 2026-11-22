@@ -1,0 +1,34 @@
+#!/bin/bash
+# Exit 0 if a camera sensor is bound, 1 if not.
+# /dev/video0 (unicam-image) is NOT a valid test - the CSI controller
+# registers it whether or not a sensor answers.
+# Cache lives in /dev/shm: per-boot tmpfs, writable without root.
+CACHE="/dev/shm/cz-camera.$UID.present"
+[ -w /dev/shm ] || CACHE=""
+if [ -n "$CACHE" ] && [ -f "$CACHE" ]; then
+    exit "$(cat "$CACHE")"
+fi
+rc=1
+
+# Cheap and precise: a sensor driver bound on I2C behind the CSI mux.
+for d in /sys/bus/i2c/drivers/imx219/*-00* \
+         /sys/bus/i2c/drivers/imx477/*-00* \
+         /sys/bus/i2c/drivers/imx708/*-00* \
+         /sys/bus/i2c/drivers/ov5647/*-00*; do
+    [ -e "$d" ] && { rc=0; break; }
+done
+
+# Authoritative fallback: libcamera enumerates only sensors that probed.
+if [ "$rc" -ne 0 ]; then
+    for t in rpicam-hello libcamera-hello; do
+        command -v "$t" >/dev/null 2>&1 || continue
+        "$t" --list-cameras 2>/dev/null \
+            | grep -qE '^[[:space:]]*[0-9]+[[:space:]]*:' && rc=0
+        break
+    done
+fi
+
+if [ -n "$CACHE" ]; then
+    { printf '%s' "$rc" > "$CACHE"; } 2>/dev/null
+fi
+exit "$rc"
