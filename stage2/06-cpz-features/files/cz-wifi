@@ -25,6 +25,76 @@ nm_fields() {
     NM_F+=("$out")
 }
 
+iface_label() {
+    local p; p=$(readlink -f "/sys/class/net/$1/device" 2>/dev/null)
+    case "$p" in
+        *usb*) printf '%s  USB dongle' "$1" ;;
+        *mmc*) printf '%s  internal' "$1" ;;
+        *)     printf '%s' "$1" ;;
+    esac
+}
+
+# Always prompt, even with one adapter. brcmfmac exposes wlan0 and wlan1,
+# so a USB dongle is usually wlan2 - enumerate, never guess by name.
+iface_bus() {
+    local p; p=$(readlink -f "/sys/class/net/$1/device" 2>/dev/null)
+    case "$p" in
+        *usb*) echo usb ;;
+        *mmc*) echo mmc ;;
+        *)     echo other ;;
+    esac
+}
+
+# wlan0 is the primary internal radio. brcmfmac also exposes an auxiliary
+# interface, so anything else must be a USB dongle to be selectable.
+iface_bus() {
+    local p; p=$(readlink -f "/sys/class/net/$1/device" 2>/dev/null)
+    case "$p" in
+        *usb*) echo usb ;;
+        *mmc*) echo mmc ;;
+        *)     echo other ;;
+    esac
+}
+
+# wlan0 is the primary internal radio. brcmfmac also exposes an auxiliary
+# interface, so anything else must be a USB dongle to be selectable.
+check_iface() {
+    [ -d "/sys/class/net/$IFACE" ] || { echo "no such interface: $IFACE"; return 1; }
+    if [ "$IFACE" != wlan0 ] && [ "$(iface_bus "$IFACE")" != usb ]; then
+        echo "no USB WiFi dongle on $IFACE"
+        echo "plug one in, or use wlan0"
+        return 1
+    fi
+}
+
+pick_iface() {
+    local -a devs=()
+    mapfile -t devs < <(nmcli -t -f DEVICE,TYPE device 2>/dev/null \
+                        | awk -F: '$2=="wifi"{print $1}')
+    if [ "${#devs[@]}" -eq 0 ]; then echo "no wifi device found"; return 1; fi
+    local i n
+    while :; do
+        clear
+        echo "select adapter:"
+        for i in "${!devs[@]}"; do
+            printf '%2d %s
+' "$((i+1))" "$(iface_label "${devs[i]}")"
+        done
+        printf 'number (0=cancel): '
+        read -r n
+        [[ "$n" =~ ^[1-9]$ ]] && [ "$n" -le "${#devs[@]}" ] || { echo cancelled; return 1; }
+        IFACE="${devs[$((n-1))]}"
+        if [ "$IFACE" != wlan0 ] && [ "$(iface_bus "$IFACE")" != usb ]; then
+            echo
+            echo "no USB WiFi dongle on $IFACE"
+            echo "plug one in, or select wlan0"
+            sleep 2
+            continue
+        fi
+        return 0
+    done
+}
+
 join() {
     local ssid="$1" pw="$2" sec="$3" hid="${4:-no}" km
     if echo "$sec" | grep -qi '802.1X\|EAP'; then
@@ -60,7 +130,7 @@ radio() {
 }
 
 scan() {
-    need
+    pick_iface || return 1
     echo "scanning..."
     nmcli device wifi rescan ifname "$IFACE" >/dev/null 2>&1
     sleep 3
@@ -86,7 +156,7 @@ scan() {
     done
     printf 'number (0=cancel): '
     read -r n
-    [[ "$n" =~ ^[1-9]$ ]] && [ "$n" -le "${#ssids[@]}" ] || { echo cancelled; return 0; }
+    [[ "$n" =~ ^[1-9]$ ]] && [ "$n" -le "${#ssids[@]}" ] || return 100
     local s="${ssids[$((n-1))]}" sec="${secs[$((n-1))]}"
     if [ -n "$sec" ] && [ "$sec" != "--" ]; then
         printf 'password: '; read -r pw
@@ -97,7 +167,7 @@ scan() {
 }
 
 hidden() {
-    need
+    pick_iface || return 1
     printf 'SSID: '; read -r ssid
     [ -n "$ssid" ] || { echo cancelled; return 0; }
     printf 'password (blank=open): '; read -r pw
@@ -126,8 +196,9 @@ signal() {
 
 case "${1:-}" in
     radio)  radio ;;
-    scan)   scan ;;
-    hidden) hidden ;;
+    scan)   scan "${2:-}" ;;
+    hidden) hidden "${2:-}" ;;
     signal) signal ;;
+    label)  iface_label "${2:-wlan0}"; echo ;;
     *) echo "usage: cz-wifi radio|scan|hidden|signal"; exit 1 ;;
 esac

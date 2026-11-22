@@ -72,7 +72,8 @@ menu() {
             if [ "${cmd#!}" != "$cmd" ]; then
                 eval "${cmd#!}"
             else
-                eval "$cmd"; pause
+                eval "$cmd"; local rc=$?
+                [ "$rc" -eq 100 ] || pause
             fi
         fi
     done
@@ -116,7 +117,8 @@ m_ir() {
 m_system() {
     menu SYSTEM system \
       "Audio"         '!m_audio' \
-      "Display"       '!m_display'
+      "Display"       '!m_display' \
+      "Hostname"        'cz-hostname'
 }
 
 m_display() {

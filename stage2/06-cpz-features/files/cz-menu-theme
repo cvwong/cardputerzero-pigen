@@ -143,7 +143,8 @@ menu() {
             if [ "${cmd#!}" != "$cmd" ]; then
                 eval "${cmd#!}"
             else
-                eval "$cmd"; pause
+                eval "$cmd"; local rc=$?
+                [ "$rc" -eq 100 ] || pause
             fi
         fi
     done
@@ -165,11 +166,23 @@ m_audio() {
       "Save levels"   'sudo alsactl store; echo saved'
 }
 
+m_adapters() {
+    local act="${1:-}"
+    local -a devs=() args=()
+    mapfile -t devs < <(nmcli -t -f DEVICE,TYPE device 2>/dev/null | awk -F: '$2=="wifi"{print $1}')
+    if [ "${#devs[@]}" -eq 0 ]; then echo "no wifi device found"; pause; return; fi
+    local d
+    for d in "${devs[@]}"; do
+        args+=("$(cz-wifi label "$d")" "cz-wifi $act $d")
+    done
+    menu ADAPTER net "${args[@]}"
+}
+
 m_net() {
     menu WIFI main \
       "Radio on/off"    'cz-wifi radio' \
-      "Scan and join"   'cz-wifi scan' \
-      "Hidden network"  'cz-wifi hidden' \
+      "Scan and join"   '!m_adapters scan' \
+      "Hidden network"  '!m_adapters hidden' \
       "Network"         'ip -brief addr; ip route'
 }
 
@@ -186,7 +199,8 @@ m_ir() {
 m_system() {
     menu SYSTEM system \
       "Audio"         '!m_audio' \
-      "Display"       '!m_display'
+      "Display"       '!m_display' \
+      "Hostname"        'cz-hostname'
 }
 
 m_display() {
