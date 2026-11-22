@@ -16,3 +16,6 @@ CHROOT
 if [ -f "${ROOTFS_DIR}/lib/netplan/00-network-manager-all.yaml" ]; then
     chmod 600 "${ROOTFS_DIR}/lib/netplan/00-network-manager-all.yaml"
 fi
+
+# cz-firstboot creates the account; the stock "set up a user" banner is stale.
+: > "${ROOTFS_DIR}/etc/issue.net"

@@ -39,6 +39,31 @@ title_row() {
 
 have()  { command -v "$1" >/dev/null 2>&1; }
 pause() { printf '\npress any key'; read -r -n1 -s _; }
+
+printf '\e]PBffff55'
+
+m_hostname() {
+    local cur new lbl hint plain colored gap YEL
+    YEL=$'\e[93m'
+    cur=$(hostnamectl --static 2>/dev/null || cat /etc/hostname)
+    lbl='Please enter a new hostname'
+    hint='blank = back'
+    gap=$(( 51 - 2 - ${#lbl} - ${#hint} - 2 ))
+    (( gap < 1 )) && gap=1
+    hdr HOSTNAME system
+    brow "  current:  ${cur:0:37}" \
+         "  ${YEL}current:${R}  ${LBL}${cur:0:37}${R}"
+    plain=$(printf '  %s%*s%s  ' "$lbl" "$gap" '' "$hint")
+    colored=$(printf '  %s%s%s%*s%s%s%s  ' \
+              "$YEL" "$lbl" "$R" "$gap" '' "$YEL" "$hint" "$R")
+    brow "$plain" "$colored"
+    bbot
+    printf '\e[?25h  > '
+    read -r new
+    [ -n "$new" ] || return 100
+    clear
+    cz-hostname "$new"
+}
 bl()    { cat "$BL/brightness" 2>/dev/null || echo 0; }
 blm()   { cat "$BL/max_brightness" 2>/dev/null || echo 100; }
 blstep() { local cur max step new
@@ -196,19 +221,6 @@ m_ir() {
       "All protocols"  'sudo ir-keytable -p all'
 }
 
-m_hostname() {
-    local cur new
-    cur=$(hostnamectl --static 2>/dev/null || cat /etc/hostname)
-    hdr HOSTNAME system
-    brow "  current   $cur" "  ${DIM}current${R}   ${LBL}${cur}${R}"
-    brow "  new name  blank = back" "  ${DIM}new name  blank = back${R}"
-    bbot
-    printf '\e[?25h  > '
-    read -r new
-    [ -n "$new" ] || return 100
-    clear
-    cz-hostname "$new"
-}
 
 m_system() {
     menu SYSTEM system \
