@@ -196,11 +196,25 @@ m_ir() {
       "All protocols"  'sudo ir-keytable -p all'
 }
 
+m_hostname() {
+    local cur new
+    cur=$(hostnamectl --static 2>/dev/null || cat /etc/hostname)
+    hdr HOSTNAME system
+    brow "  current   $cur" "  ${DIM}current${R}   ${LBL}${cur}${R}"
+    brow "  new name  blank = back" "  ${DIM}new name  blank = back${R}"
+    bbot
+    printf '\e[?25h  > '
+    read -r new
+    [ -n "$new" ] || return 100
+    clear
+    cz-hostname "$new"
+}
+
 m_system() {
     menu SYSTEM system \
       "Audio"         '!m_audio' \
       "Display"       '!m_display' \
-      "Hostname"        'cz-hostname'
+      "Hostname"        'm_hostname'
 }
 
 m_display() {
