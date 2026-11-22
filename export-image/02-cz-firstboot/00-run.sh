@@ -11,3 +11,8 @@ chmod 644 "${ROOTFS_DIR}/etc/systemd/system/userconfig.service.d/10-cz-replaced.
 on_chroot << 'CHROOT'
 systemctl enable getty@tty1.service
 CHROOT
+
+# netplan warns on world-readable config files.
+if [ -f "${ROOTFS_DIR}/lib/netplan/00-network-manager-all.yaml" ]; then
+    chmod 600 "${ROOTFS_DIR}/lib/netplan/00-network-manager-all.yaml"
+fi
