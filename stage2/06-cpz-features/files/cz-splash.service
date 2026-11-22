@@ -1,6 +1,7 @@
 [Unit]
 Description=CardputerZero text boot splash
-After=lcd-console.service
+Wants=lcd-console.service
+After=lcd-console.service sound.target
 Before=getty@tty1.service
 
 [Service]

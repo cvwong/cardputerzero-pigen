@@ -24,3 +24,15 @@ find /usr/share/doc -depth -type d -empty -delete 2>/dev/null || true
 
 apt-get clean
 EOF
+on_chroot << 'CHROOT'
+# Protect the kernel and networking from autoremove.
+dpkg-query -W -f='${Package}\n' 'linux-image*' 'linux-modules*' \
+    'network-manager*' 'wpasupplicant*' 'netplan*' 2>/dev/null | xargs -r apt-mark manual
+# Headers were only needed to build the panel module in stage 05.
+apt-mark showhold | grep '^linux-headers' | xargs -r apt-mark unhold
+P=$(dpkg-query -W -f='${Package}\n' 'linux-headers*' 2>/dev/null || true)
+if [ -n "$P" ]; then apt-get purge -y $P; fi
+# populate_database in export-image/05-finalise fetches a changelog per package.
+apt-get purge -y apt-listchanges || true
+apt-get autoremove --purge -y
+CHROOT

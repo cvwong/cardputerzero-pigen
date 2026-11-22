@@ -31,3 +31,19 @@ on_chroot <<- \EOF
 	apt-get update
 	apt-get dist-upgrade -y
 EOF
+
+# --- build speed: neutralise apt-listchanges, cap apt network waits ---
+install -d "${ROOTFS_DIR}/etc/apt/apt.conf.d"
+cat > "${ROOTFS_DIR}/etc/apt/listchanges.conf" <<'LC'
+[apt]
+frontend=none
+confirm=0
+email_address=root
+LC
+rm -f "${ROOTFS_DIR}/etc/apt/apt.conf.d/20listchanges"
+cat > "${ROOTFS_DIR}/etc/apt/apt.conf.d/99fast-acquire" <<'AC'
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
+Acquire::ftp::Timeout "30";
+Acquire::Retries "3";
+AC

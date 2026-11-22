@@ -1,8 +1,5 @@
 #!/bin/bash
-# cz-splash — image boot splash on the CardputerZero LCD, shown before login.
-# Switches tty1 to graphics mode (so fbcon can't redraw over the image), writes a
-# pre-rendered 320x170 RGB565 image to the framebuffer, plays a ping once sound is
-# ready, holds until the system is ready for login, then restores text mode for getty.
+# cz-splash — image splash on the CardputerZero LCD before login.
 FB=${CZ_SPLASH_FB:-/dev/fb0}
 IMG=${CZ_SPLASH_IMG:-/usr/share/cz/cz-splash.rgb565}
 PING=${CZ_SPLASH_PING:-/usr/share/cz/cz-ping.wav}
@@ -10,37 +7,40 @@ CZ_FONT=${CZ_FONT:-/usr/share/consolefonts/Lat15-Terminus12x6.psf.gz}
 MIN_SHOW=${CZ_SPLASH_MIN:-3}
 MAX_WAIT=${CZ_SPLASH_MAX:-15}
 
-# KDSETMODE: graphics stops fbcon rendering (image stays); text restores it for getty.
 vtmode() {
   python3 -c 'import os,fcntl,sys
 fd=os.open("/dev/tty1",os.O_RDWR)
 fcntl.ioctl(fd,0x4B3A,1 if sys.argv[1]=="g" else 0)
-os.close(fd)' "$1" 2>/dev/null
+os.close(fd)' "$1"
 }
 trap 'vtmode t; setfont -C /dev/tty1 "$CZ_FONT" 2>/dev/null' EXIT TERM INT
 
 start=$(date +%s)
-vtmode g
-cat "$IMG" > "$FB" 2>/dev/null
 
-# Ping after sound.target (alsa-restore has set volumes); image is already up.
-for _ in $(seq 1 50); do
-  systemctl is-active --quiet sound.target && break
-  sleep 0.1
+# Wait for the panel driver to register the framebuffer.
+for _ in $(seq 1 100); do [ -w "$FB" ] && break; sleep 0.1; done
+if [ ! -w "$FB" ]; then
+    echo "cz-splash: $FB not writable after 10s - no image" >&2
+else
+    vtmode g
+    cat "$IMG" > "$FB" || echo "cz-splash: blit failed rc=$?" >&2
+fi
+
+# Wait for the codec to actually enumerate, not just sound.target.
+for _ in $(seq 1 100); do
+    grep -q ES8389 /proc/asound/cards 2>/dev/null && break
+    sleep 0.1
 done
-# Make sure the output path is enabled and at an audible level before playing.
-amixer -c ES8389Audio sset Speaker on >/dev/null 2>&1
-amixer -c ES8389Audio sset DACL 80% >/dev/null 2>&1
-amixer -c ES8389Audio sset DACR 80% >/dev/null 2>&1
-aplay -q "$PING" 2>/dev/null
-echo "ping rc=$? pcm=$( [ -e /dev/snd/pcmC0D0p ] && echo present || echo missing )" >&2
+amixer -c ES8389Audio sset Speaker on  >/dev/null || echo "cz-splash: Speaker ctl failed" >&2
+amixer -c ES8389Audio sset DACL 80%    >/dev/null
+amixer -c ES8389Audio sset DACR 80%    >/dev/null
+aplay -q "$PING" || echo "cz-splash: aplay rc=$? cards=$(tr '\n' ';' </proc/asound/cards)" >&2
 
-# Hold until logins are permitted, but at least MIN_SHOW and at most MAX_WAIT.
 while :; do
-  now=$(date +%s); el=$((now - start))
-  [ "$el" -ge "$MAX_WAIT" ] && break
-  if [ "$el" -ge "$MIN_SHOW" ] && systemctl is-active --quiet systemd-user-sessions.service; then
-    break
-  fi
-  sleep 0.2
+    el=$(( $(date +%s) - start ))
+    [ "$el" -ge "$MAX_WAIT" ] && break
+    if [ "$el" -ge "$MIN_SHOW" ] && systemctl is-active --quiet systemd-user-sessions.service; then
+        break
+    fi
+    sleep 0.2
 done
