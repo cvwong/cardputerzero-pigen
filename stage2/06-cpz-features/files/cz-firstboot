@@ -61,6 +61,8 @@ fi
 for g in sudo adm dialout audio video plugdev input netdev gpio i2c spi; do
     getent group "$g" >/dev/null && usermod -aG "$g" "$U"
 done
+# rename-user leaves the shell as nologin until setup completes
+usermod -s /bin/bash "$U"
 printf '%s:%s\n' "$U" "$P1" | chpasswd
 unset P1 P2
 
