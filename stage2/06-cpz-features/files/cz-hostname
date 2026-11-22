@@ -1,6 +1,7 @@
 #!/bin/bash
-# cz-hostname — show or set hostname, keeping /etc/hosts in sync so sudo
-# does not warn "unable to resolve host".
+# cz-hostname — show or set hostname. /etc/hosts and the hostname are changed
+# in ONE sudo invocation: two calls leave a window where sudo cannot resolve
+# the machine's own name and warns on every subsequent call.
 set -u
 cur=$(hostnamectl --static 2>/dev/null || cat /etc/hostname)
 
@@ -19,13 +20,16 @@ if ! [[ "$new" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; then
 fi
 if [ "$new" = "$cur" ]; then echo "already $new"; exit 0; fi
 
-sudo hostnamectl set-hostname "$new" || exit 1
+sudo sh -c '
+    h="$1"
+    if grep -qE "^127\.0\.1\.1[[:space:]]" /etc/hosts; then
+        sed -i -E "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t$h/" /etc/hosts
+    else
+        printf "127.0.1.1\t%s\n" "$h" >> /etc/hosts
+    fi
+    hostnamectl set-hostname "$h"
+' _ "$new" || { echo "failed to set hostname"; exit 1; }
 
-if grep -qE '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
-    sudo sed -i -E "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t$new/" /etc/hosts
-else
-    printf '127.0.1.1\t%s\n' "$new" | sudo tee -a /etc/hosts >/dev/null
-fi
-
-echo "hostname: $cur -> $new"
-echo "open a new shell to see it; reboot updates everything"
+printf 'hostname: %s -> %s\n' "$cur" "$new"
+grep -E '^127\.0\.1\.1' /etc/hosts
+echo "open a new shell to see it"
