@@ -29,16 +29,6 @@ wlan=$(iw dev 2>/dev/null | awk '/Interface/{print $2; exit}')
 iface=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
 [ -n "$iface" ] || iface=$wlan
 
-# ---- link ----
-net="offline"
-if [ -n "$iface" ] && [ "$iface" = "$wlan" ]; then
-    link=$(iw dev "$iface" link 2>/dev/null)
-    ssid=$(printf '%s\n' "$link" | sed -n 's/^[[:space:]]*SSID: //p' | head -1)
-    sig=$(printf '%s\n' "$link" | sed -n 's/^[[:space:]]*signal: //p' | awk '{print $1}' | head -1)
-    net="${ssid:0:14} ${sig:-?}"
-elif [ -n "$iface" ]; then
-    net="eth"
-fi
 
 # ---- throughput: delta since previous invocation ----
 rate=""
@@ -59,8 +49,8 @@ if [ -n "$iface" ] && [ -r "/sys/class/net/$iface/statistics/rx_bytes" ]; then
     rate="R$(hr "$drx") T$(hr "$dtx")"
 fi
 
-line=$(printf '%s' "$bat $net $rate $(date +%H:%M)" | tr -s ' ')
+line=$(printf '%s' "Batt: $bat $rate $(date +%H:%M)" | tr -s ' ')
 if [ "${#line}" -gt "$MAXW" ]; then
-    line=$(printf '%s' "$bat $rate $(date +%H:%M)" | tr -s ' ')
+    line=$(printf '%s' "Batt: $bat $rate $(date +%H:%M)" | tr -s ' ')
 fi
 printf '%s' "${line:0:$MAXW}"
