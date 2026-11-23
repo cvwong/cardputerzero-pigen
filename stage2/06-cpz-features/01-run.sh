@@ -26,6 +26,9 @@ systemctl enable cz-keymap.service
 CHROOT
 install -D -m 0644 files/issue.cz "${ROOTFS_DIR}/etc/issue"
 install -D -m 0644 files/asound.conf "${ROOTFS_DIR}/etc/asound.conf"
+# Shared 53x14 theme (palette, box drawing, hdr/row helpers) sourced by both
+# cz-menu-theme and cz-record, so it must be in place before either runs.
+install -D -m 0644 files/cz-theme.sh  "${ROOTFS_DIR}/usr/local/lib/cz-theme.sh"
 install -D -m 0755 files/cz-menu "${ROOTFS_DIR}/usr/local/bin/cz-menu"
 install -D -m 0755 files/cz-menu-theme "${ROOTFS_DIR}/usr/local/bin/cz-menu-theme"
 install -D -m 0755 files/cz-ir "${ROOTFS_DIR}/usr/local/bin/cz-ir"

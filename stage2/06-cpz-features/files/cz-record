@@ -1,6 +1,11 @@
 #!/bin/bash
 # cz-record — voice memos from the CardputerZero MEMS mic via the ES8389 ADC.
-CARD=ES8389Audio
+# Screens use the shared 53x14 theme (cz-theme.sh), the same one cz-menu-theme
+# draws, so the recorder matches the menu that launches it.
+CZ_THEME="${CZ_THEME:-/usr/local/lib/cz-theme.sh}"
+[ -r "$CZ_THEME" ] || { echo "cz-record: cannot read $CZ_THEME" >&2; exit 1; }
+. "$CZ_THEME"
+
 CAPDEV="plughw:CARD=${CARD},DEV=0"
 DIR="${CZ_RECORD_DIR:-$HOME/Recordings}"
 RATE="${CZ_RECORD_RATE:-48000}"
@@ -11,9 +16,6 @@ FMT="${CZ_RECORD_FMT:-S16_LE}"
 GAIN="${CZ_RECORD_GAIN:-191}"
 PROBE_SEC="${CZ_RECORD_PROBE:-2}"
 CARDS="${CZ_RECORD_CARDS:-/proc/asound/cards}"
-
-have()  { command -v "$1" >/dev/null 2>&1; }
-pause() { printf '\npress any key'; read -r -n1 -s _; }
 
 card_ok() { grep -q ES8389 "$CARDS" 2>/dev/null; }
 
@@ -31,14 +33,30 @@ setup_mic() {
     amixer -c "$CARD" sset 'ADCR' "$GAIN" >/dev/null 2>&1
 }
 
-# ctl <name> — one line of the capture path's current state, for `check`.
-ctl() {
-    local v
-    v=$(amixer -c "$CARD" sget "$1" 2>/dev/null \
+# ctlval <name> — one capture control's current value, unwrapped from the amixer
+# decoration ("Item0: 'AMIC'" -> AMIC, "[0.00dB]" -> 0.00dB).
+ctlval() {
+    amixer -c "$CARD" sget "$1" 2>/dev/null \
         | grep -oE "Item0: '[^']*'|\[(on|off)\]|\[-?[0-9.]+dB\]" | head -1 \
-        | sed -e "s/^Item0: '//" -e "s/'$//" -e 's/^\[//' -e 's/\]$//')
-    printf '  %-13s %s\n' "$1" "${v:-?}"
+        | sed -e "s/^Item0: '//" -e "s/'$//" -e 's/^\[//' -e 's/\]$//'
 }
+# ctlrow <name> <value> [<name2> <value2>] — boxed row for the mic check screen.
+# Fields are 12 wide, not 11: the longest control name ("PGAL Select") is exactly
+# 11 characters, so an 11-wide field would run straight into its value.
+ctlrow() {
+    local plain colored
+    if [ -n "${3:-}" ]; then
+        plain=$(printf '  %-12s%-12s%-12s%s' "$1" "${2:-?}" "$3" "${4:-?}")
+        colored=$(printf '  %s%-12s%s%s%-12s%s%s%-12s%s%s%s%s' \
+            "$DIM" "$1" "$R" "$LBL" "${2:-?}" "$R" "$DIM" "$3" "$R" "$LBL" "${4:-?}" "$R")
+    else
+        plain=$(printf '  %-12s%s' "$1" "${2:-?}")
+        colored=$(printf '  %s%-12s%s%s%s%s' "$DIM" "$1" "$R" "$LBL" "${2:-?}" "$R")
+    fi
+    brow "$plain" "$colored"
+}
+# info <plain> <colored> — a boxed caption row.
+info() { brow "$1" "$2"; }
 
 # level <wav> -> "SECONDS PEAK_DB RMS_DB"; audioop is gone in py3.13, use array.
 level() {
@@ -100,31 +118,49 @@ running() {
     [ -n "$s" ] && [ "$s" != Z ]
 }
 
-# Run <cmd> in the background, tick a clock, and stop it on the first keypress.
-# SIGINT (not SIGKILL) so arecord writes a correct WAV header. Elapsed time comes
+# tick <seconds> <hint> [final] — draw, or redraw in place, the elapsed-time row.
+# On a tty it animates over the previous row. When piped (tests, ssh capture) the
+# cursor-up escape would corrupt the output, so only the final row is printed --
+# still enough to see how long the capture ran, without one line per second.
+TICK_DRAWN=0
+tick() {
+    local m=$(( 10#$1 / 60 )) s=$(( 10#$1 % 60 )) plain colored
+    if [ -t 1 ]; then
+        [ "$TICK_DRAWN" = 1 ] && printf '\e[1A\r'
+    else
+        [ "${3:-}" = final ] || return 0
+    fi
+    TICK_DRAWN=1
+    plain=$(printf '  %02d:%02d  %s' "$m" "$s" "$2")
+    colored=$(printf '  %s%02d:%02d%s  %s%s%s' "$ACCENT" "$m" "$s" "$R" "$DIM" "$2" "$R")
+    brow "$plain" "$colored"
+}
+
+# Run <cmd> in the background and stop it on the first keypress.
+# SIGINT (not SIGKILL) so arecord finalises the WAV header. Elapsed time comes
 # from the clock, not a loop counter: with no tty on stdin `read -t 1` returns
 # immediately, so counting iterations would spin the display. Without a tty there
 # is no key to stop on, so just wait for the capture to finish on its own.
 run_timed() {
-    local label="$1"; shift
+    local hint="$1"; shift
     "$@" < /dev/null &
     local pid=$! start t
     start=$(date +%s)
     if [ -t 0 ]; then
         while running "$pid"; do
             t=$(( $(date +%s) - start ))
-            printf '\r  %s %02d:%02d  ' "$label" $((t/60)) $((t%60))
+            tick "$t" "$hint"
             read -r -t 1 -n1 -s _ && break
         done
         kill -INT "$pid" 2>/dev/null
     fi
     wait "$pid" 2>/dev/null
-    t=$(( $(date +%s) - start ))
-    printf '\r  %s %02d:%02d\n' "$label" $((t/60)) $((t%60))
+    ELAPSED=$(( $(date +%s) - start ))
+    tick "$ELAPSED" "$hint" final
 }
 
 do_record() {
-    local name="${1:-}" secs="${2:-}" ts out dur peak rms
+    local name="${1:-}" secs="${2:-}" ts out fn dur peak rms hint
     card_ok  || { echo "no ES8389 sound card"; return 1; }
     have arecord || { echo "arecord not installed"; return 1; }
     mkdir -p "$DIR" || { echo "cannot create $DIR"; return 1; }
@@ -134,37 +170,45 @@ do_record() {
     local -a cmd=(arecord -q -D "$CAPDEV" -f "$FMT" -c "$CH" -r "$RATE")
     if [ -n "$secs" ]; then
         [[ "$secs" =~ ^[0-9]+$ ]] || { echo "seconds must be a number"; return 1; }
-        cmd+=(-d "$secs")
+        cmd+=(-d "$secs"); hint="recording ${secs}s"
     elif [ ! -t 0 ]; then
         echo "not a tty: give a duration, e.g."
         echo "  cz-record rec note 10"
         return 1
+    else
+        hint="speak now, any key to stop"
     fi
 
     ts=$(date +%Y%m%d-%H%M%S)
     if [ -n "$name" ]; then out="$DIR/${name}-${ts}.wav"
     else out="$DIR/REC-${ts}.wav"; fi
+    fn="${out##*/}"; fn=${fn:0:44}
 
     setup_mic
-    printf 'rec -> %.46s\n  speak now%s\n' "${out##*/}" \
-        "$([ -t 0 ] && [ -z "$secs" ] && echo ', any key to stop')"
-    run_timed 'rec' "${cmd[@]}" "$out"
+    hdr "RECORDING" audio
+    info "  -> $fn" "  ${DIM}->${R} ${LBL}$fn${R}"
+    TICK_DRAWN=0; tick 0 "$hint"
+    run_timed "$hint" "${cmd[@]}" "$out"
 
     if [ ! -s "$out" ]; then
-        rm -f "$out"; echo "nothing captured"; return 4
+        rm -f "$out"
+        info "  nothing captured" "  ${BAD}nothing captured${R}"
+        bbot
+        return 4
     fi
     set -- $(level "$out"); dur="$1"; peak="$2"; rms="$3"
-    printf 'saved %.46s\n' "${out##*/}"
-    printf '  %ss  peak %sdB  rms %sdB\n' "$dur" "$peak" "$rms"
+    info "$(printf '  %ss  peak %sdB  rms %sdB' "$dur" "$peak" "$rms")" \
+         "$(printf '  %s%ss%s  peak %s%sdB%s  rms %s%sdB%s' \
+             "$LBL" "$dur" "$R" "$LBL" "$peak" "$R" "$LBL" "$rms" "$R")"
     if silent "$peak"; then
-        echo 'WARNING: essentially silent.'
-        echo '  try: cz-record check'
-        echo '  then: cz-record gain 210'
+        info "  SILENT: try Mic check, or gain 210" \
+             "  ${WARN}SILENT${R}${DIM}: try Mic check, or gain 210${R}"
     fi
+    bbot
 }
 
 do_play() {
-    local f="${1:-}"
+    local f="${1:-}" fn hint
     have aplay || { echo "aplay not installed"; return 1; }
     if [ -n "$f" ]; then
         resolve "$f" || { echo "no recording: $f"; return 1; }
@@ -173,13 +217,18 @@ do_play() {
         pick 'play which?' || return 1
         f="${RECS[$PICK]}"
     fi
-    printf 'play %s%s\n' "$(basename "$f")" \
-        "$([ -t 0 ] && echo '  any key to stop')"
-    run_timed 'play' aplay -q -D default "$f"
+    fn="$(basename "$f")"; fn=${fn:0:44}
+    if [ -t 0 ]; then hint="any key to stop"; else hint="playing"; fi
+
+    hdr "PLAYBACK" audio
+    info "  -> $fn" "  ${DIM}->${R} ${LBL}$fn${R}"
+    TICK_DRAWN=0; tick 0 "$hint"
+    run_timed "$hint" aplay -q -D default "$f"
+    bbot
 }
 
 do_delete() {
-    local f="${1:-}"
+    local f="${1:-}" n
     if [ -n "$f" ]; then
         resolve "$f" || { echo "no recording: $f"; return 1; }
         f="$RES"
@@ -187,12 +236,12 @@ do_delete() {
         pick 'delete which?' || return 1
         f="${RECS[$PICK]}"
     fi
-    printf 'delete %s? [Y/N] ' "$(basename "$f")"
-    read -r -n1 c; echo
-    case "$c" in
-      y|Y) rm -f "$f" && echo deleted ;;
-      *)   echo kept ;;
-    esac
+    n="$(basename "$f" .wav)"; n=${n:0:36}
+    if ask "Delete $n ?"; then
+        rm -f "$f" && echo "deleted $n"
+    else
+        echo "kept $n"
+    fi
 }
 
 do_list() {
@@ -210,34 +259,45 @@ do_list() {
 
 # Record a short probe and report whether the mic actually produced signal.
 do_check() {
-    local tmp dur peak rms
+    local tmp dur peak rms cardline
     card_ok || { echo "no ES8389 sound card"; return 1; }
     have arecord || { echo "arecord not installed"; return 1; }
 
-    echo "== MIC CHECK =="
-    grep ES8389 "$CARDS" 2>/dev/null | head -1 | cut -c1-53
-    echo "capture path:"
-    ctl 'ADC MUX'; ctl 'Mic Jack'; ctl 'ADCL'
-    ctl 'ADCL PGA'; ctl 'PGAL Select'; ctl 'PGAR Select'
+    hdr_lite "MIC CHECK"
+    # /proc/asound/cards reads " 1 [ES8389Audio    ]: cardputerzero-a - ES8389-Audio",
+    # which is 51 columns on its own; show the card number and id instead of
+    # truncating the line mid-word.
+    cardline=$(grep ES8389 "$CARDS" 2>/dev/null | head -1 \
+        | sed -n 's/^ *\([0-9]*\) *\[\([^]]*\)\].*/card \1  [\2]/p' \
+        | sed 's/  *\]/]/')
+    [ -n "$cardline" ] || cardline="ES8389 present"
+    info "  $cardline" "  ${LBL}$cardline${R}"
+    ctlrow "ADC MUX"     "$(ctlval 'ADC MUX')" "Mic Jack" "$(ctlval 'Mic Jack')"
+    ctlrow "ADCL"        "$(ctlval 'ADCL')"    "ADCL PGA" "$(ctlval 'ADCL PGA')"
+    ctlrow "PGAL Select" "$(ctlval 'PGAL Select')"
+    ctlrow "PGAR Select" "$(ctlval 'PGAR Select')"
 
     tmp=$(mktemp /tmp/cz-micprobe-XXXXXX.wav) || return 1
     setup_mic
-    printf 'probing %ss - speak now\n' "$PROBE_SEC"
+    info "  probing ${PROBE_SEC}s - speak now" \
+         "  ${DIM}probing ${PROBE_SEC}s - speak now${R}"
     arecord -q -D "$CAPDEV" -f "$FMT" -c "$CH" -r "$RATE" -d "$PROBE_SEC" "$tmp" < /dev/null
 
     set -- $(level "$tmp"); dur="$1"; peak="$2"; rms="$3"
     rm -f "$tmp"
-    printf 'result: %ss  peak %sdB  rms %sdB\n' "$dur" "$peak" "$rms"
+    info "$(printf '  %ss peak %sdB rms %sdB' "$dur" "$peak" "$rms")" \
+         "$(printf '  %s%ss%s peak %s%sdB%s rms %s%sdB%s' \
+             "$LBL" "$dur" "$R" "$LBL" "$peak" "$R" "$LBL" "$rms" "$R")"
     if silent "$peak"; then
-        echo '-> SILENT. Likely causes:'
-        echo '   1. Mic Jack off, or ADC MUX set'
-        echo '      to DMIC (see above)'
-        echo '   2. capture gain too low:'
-        echo '      cz-record gain 210'
-        echo '   3. another process holds the card'
+        info "  SILENT: check Mic Jack / ADC MUX" \
+             "  ${BAD}SILENT${R}${DIM}: check Mic Jack / ADC MUX${R}"
+        info "  then try: cz-record gain 210" \
+             "  ${DIM}then try: cz-record gain 210${R}"
+        bbot
         return 4
     fi
-    echo '-> mic is picking up signal'
+    info "  mic is picking up signal" "  ${OK}mic is picking up signal${R}"
+    bbot
 }
 
 do_gain() {
@@ -252,49 +312,60 @@ do_gain() {
     echo 'persist with: Audio menu -> Save levels'
 }
 
-# pick <prompt> -> PICK (index into RECS); newest 9 fit the 14-row console.
+# pick <prompt> -> PICK (index into RECS). Boxed rows cost screen space, so the
+# window is 7 entries; anything older shows as a count and is reachable from
+# `cz-record list`/`play <name>`.
 pick() {
     map_recs
     [ "${#RECS[@]}" -gt 0 ] || { echo "no recordings in $DIR"; return 1; }
-    local i n show=9
+    local i=0 f bn show=7
     while :; do
-        clear
-        echo "== RECORDINGS =="
+        hdr_lite "RECORDINGS"
         i=0
-        for n in "${RECS[@]}"; do
+        for f in "${RECS[@]}"; do
             [ "$i" -ge "$show" ] && break
             i=$((i+1))
-            printf ' %d %s\n' "$i" "$(basename "$n" .wav)"
+            bn="$(basename "$f" .wav)"; bn=${bn:0:45}
+            row1 "$i" "$bn"
         done
         [ "${#RECS[@]}" -gt "$show" ] \
-            && echo "   ...and $(( ${#RECS[@]} - show )) older"
-        echo " 0 Back"
-        printf '%s ' "$1"
-        read -r -n1 -s k; echo
+            && info "  ...and $(( ${#RECS[@]} - show )) older" \
+                    "  ${DIM}...and $(( ${#RECS[@]} - show )) older${R}"
+        row1 0 "Back"
+        info "  $1" "  ${DIM}$1${R}"
+        bbot
+        read -r -n1 -s k
         [ "$k" = 0 ] && return 1
         [[ "$k" =~ ^[1-9]$ ]] && [ "$k" -le "$i" ] && { PICK=$((k-1)); return 0; }
     done
 }
 
 do_menu() {
+    local k n mic
     while :; do
-        clear
         map_recs
-        echo "== RECORDER =="
-        echo "  mic: $(card_ok && echo ES8389 || echo absent)   saved: ${#RECS[@]}"
-        printf '  dir: %.45s\n' "$DIR"
-        echo ' 1 Record'
-        echo ' 2 Play'
-        echo ' 3 Delete'
-        echo ' 4 Mic check'
-        echo ' 0 Back'
+        mic=$(card_ok && echo ok || echo absent)
+        hdr "RECORDER" audio
+        info "$(printf '  %d saved   mic %s' "${#RECS[@]}" "$mic")" \
+             "$(printf '  %s%d saved%s   %smic %s%s' "$LBL" "${#RECS[@]}" "$R" "$DIM" "$mic" "$R")"
+        info "  ${DIR:0:47}" "  ${DIM}${DIR:0:47}${R}"
+        row1 1 "Record"
+        row1 2 "Play"
+        row1 3 "Delete"
+        row1 4 "Mic check"
+        row1 0 "Back"
+        bbot
         read -r -n1 -s k
         case "$k" in
-          1) clear; printf 'name (blank = REC-timestamp): '; read -r n
+          1) hdr_lite "NEW RECORDING"
+             info "  blank = REC-<timestamp>" "  ${DIM}blank = REC-<timestamp>${R}"
+             bbot
+             printf '\e[?25h  > '
+             read -r n
              do_record "$n"; pause ;;
-          2) clear; do_play;   pause ;;
-          3) clear; do_delete; pause ;;
-          4) clear; do_check;  pause ;;
+          2) do_play;   pause ;;
+          3) do_delete; pause ;;
+          4) do_check;  pause ;;
           0) return ;;
         esac
     done

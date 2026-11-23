@@ -6,6 +6,10 @@ set -u
 export LC_ALL=C.UTF-8
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/../stage2/06-cpz-features/files/cz-menu-theme"
+# cz-menu-theme sources the shared theme lib from /usr/local/lib, which does not
+# exist on a dev machine, so point it at the copy in the source tree.
+export CZ_THEME="$HERE/../stage2/06-cpz-features/files/cz-theme.sh"
+[ -r "$CZ_THEME" ] || { echo "missing $CZ_THEME"; exit 1; }
 FUNCS="$(mktemp)"
 trap 'rm -f "$FUNCS"' EXIT
 # Load only the function/theme definitions, not the interactive main loop.

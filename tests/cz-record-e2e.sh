@@ -6,8 +6,13 @@
 # reported instead of being saved as a "successful" recording.
 # Run: bash tests/cz-record-e2e.sh
 set -u
+# Box drawing is multibyte; without a UTF-8 locale awk counts bytes, not columns.
+export LC_ALL=C.UTF-8
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CZ="$HERE/../stage2/06-cpz-features/files/cz-record"
+# cz-record sources the shared theme lib from /usr/local/lib, absent on a dev box.
+export CZ_THEME="$HERE/../stage2/06-cpz-features/files/cz-theme.sh"
+[ -r "$CZ_THEME" ] || { echo "missing $CZ_THEME"; exit 1; }
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 MOCK="$WORK/bin"
@@ -77,21 +82,52 @@ export PATH="$MOCK:$PATH"
 fail=0
 ok()  { printf 'PASS: %s\n' "$1"; }
 bad() { printf 'FAIL: %s\n' "$1"; fail=1; }
-has() { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3 — missing [$2] in: $1" ;; esac; }
-hasnt(){ case "$1" in *"$2"*) bad "$3 — unexpected [$2] in: $1" ;; *) ok "$3" ;; esac; }
-# Match a whole line by regex, so the assertions do not depend on exact padding.
+# Screen output is themed, so literals like "peak -8.7dB" are split by ANSI
+# escapes. Every content assertion matches against the stripped form.
+# pause() prints "press any key" with no trailing newline; on a real console the
+# next screen's clear wipes it, but in captured output it runs into the following
+# box top, so split it back onto its own line.
+strip() { printf '%s' "$1" \
+    | sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' -e 's/press any key/&\n/' \
+    | tr -d '\r'; }
+has() { local h; h=$(strip "$1")
+        case "$h" in *"$2"*) ok "$3" ;; *) bad "$3 — missing [$2] in: $h" ;; esac; }
+hasnt(){ local h; h=$(strip "$1")
+        case "$h" in *"$2"*) bad "$3 — unexpected [$2] in: $h" ;; *) ok "$3" ;; esac; }
+# Match a whole line by regex, so assertions do not depend on exact padding.
 line_has() {
-    if printf '%s\n' "$1" | grep -qE "$2"; then ok "$3"
+    if strip "$1" | grep -qE "$2"; then ok "$3"
     else bad "$3 — no line matching /$2/"; fi
 }
-# The LCD console is 53 columns wide (see tests/cz-menu-theme-layout.sh); anything
-# wider wraps and garbles the screen. \r from the progress clock is stripped first.
+# The LCD console is 53 columns wide (see tests/cz-menu-theme-layout.sh). Count
+# with bash's ${#l}, not awk: mawk's length() reports bytes, and the box-drawing
+# characters are 3 bytes each, so a 53-column row measures 159.
 wide() {
-    local over
-    over=$(printf '%s\n' "$2" | tr -d '\r' \
-        | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' \
-        | awk 'length($0)>53{print length($0)": "$0}')
-    if [ -n "$over" ]; then bad "$1 exceeds 53 columns: $over"; else ok "$1 fits 53 columns"; fi
+    local body l w over=0
+    body=$(strip "$2")
+    while IFS= read -r l; do
+        w=${#l}
+        [ "$w" -gt 53 ] && { bad "$1 line is $w columns (want <=53): [$l]"; over=1; }
+    done <<< "$body"
+    [ "$over" = 0 ] && ok "$1 fits 53 columns"
+    return $over
+}
+# boxed <label> <output> — every themed screen must be a well-formed box:
+# a 53-wide ╔═╗ top, a ╚═╝ bottom, and each ║ row exactly 53 columns and closed.
+boxed() {
+    local body l w b=0
+    body=$(strip "$2")
+    printf '%s\n' "$body" | grep -q '^╔═\{51\}╗$' || { bad "$1 has no 53-wide box top"; b=1; }
+    printf '%s\n' "$body" | grep -q '^╚═\{51\}╝$' || { bad "$1 has no 53-wide box bottom"; b=1; }
+    while IFS= read -r l; do
+        case "$l" in
+            '║'*) w=${#l}
+                  [ "$w" -eq 53 ] || { bad "$1 box row is $w wide, want 53: [$l]"; b=1; }
+                  case "$l" in *'║') ;; *) bad "$1 box row does not close: [$l]"; b=1 ;; esac ;;
+        esac
+    done <<< "$body"
+    [ "$b" = 0 ] && ok "$1 is a well-formed 53-wide box"
+    return $b
 }
 calls() { cat "$CZ_TEST_CALLS" 2>/dev/null; }
 reset_calls() { : > "$CZ_TEST_CALLS"; }
@@ -107,9 +143,10 @@ out=$(rec "$D" rec '' 1 2>&1); rc=$?
 echo "$out"
 n=$(find "$D" -name '*.wav' | wc -l)
 if [ "$rc" = 0 ] && [ "$n" = 1 ]; then ok "rec saved exactly one wav"; else bad "rec saved $n wav(s), rc=$rc"; fi
-has "$out" "saved REC-" "rec reports the saved filename"
+has "$out" "RECORDING" "rec draws the themed RECORDING screen"
+has "$out" "-> REC-" "rec names the saved file"
 has "$out" "peak -8.7dB" "rec reports the tone peak level"
-hasnt "$out" "WARNING" "tone recording is not flagged silent"
+hasnt "$out" "SILENT" "tone recording is not flagged silent"
 # Control names must be the short ALSA simple-control names the device reports.
 has "$(calls)" "sset ADC MUX AMIC" "setup_mic selects the analog mic (AMIC)"
 has "$(calls)" "sset Mic Jack on" "setup_mic enables the Mic Jack pin switch"
@@ -122,6 +159,7 @@ has "$(calls)" "-c 1 -r 48000" "captures mono 48kHz"
 has "$(calls)" "plughw:CARD=ES8389Audio" "captures from the ES8389 card"
 has "$(calls)" "-d 1" "an explicit duration is passed to arecord"
 wide "rec output" "$out"
+boxed "rec screen" "$out"
 
 echo "=== cz-record rec (named) ==="
 D="$WORK/r2"; mkdir -p "$D"; reset_calls
@@ -147,7 +185,7 @@ D="$WORK/r7"; mkdir -p "$D"; reset_calls
 export CZ_TEST_SLEEP=3
 out=$(rec "$D" rec '' 3 2>&1)
 unset CZ_TEST_SLEEP
-t=$(printf '%s' "$out" | grep -o '[0-9][0-9]:[0-9][0-9]' | tail -1)
+t=$(strip "$out" | grep -F 'recording 3s' | grep -oE '[0-9][0-9]:[0-9][0-9]' | head -1)
 if [ -z "$t" ]; then
     bad "no elapsed clock in output: $out"
 else
@@ -186,8 +224,8 @@ D="$WORK/r3"; mkdir -p "$D"; reset_calls
 export CZ_TEST_TONE=0
 out=$(rec "$D" rec '' 1 2>&1); echo "$out"
 export CZ_TEST_TONE=1
-has "$out" "WARNING: essentially silent" "silent capture is reported, not silently accepted"
-has "$out" "cz-record gain" "silence warning suggests raising the capture gain"
+has "$out" "SILENT" "silent capture is reported, not silently accepted"
+has "$out" "gain 210" "silence warning suggests raising the capture gain"
 
 echo "=== cz-record rec (no card) ==="
 export CZ_RECORD_CARDS="$WORK/nope"
@@ -230,29 +268,29 @@ D="$WORK/r6"; mkdir -p "$D"; reset_calls
 export CZ_RECORD_PROBE=2
 out=$(rec "$D" check 2>&1); rc=$?
 echo "$out"
-has "$out" "== MIC CHECK ==" "check prints its header"
+has "$out" "MIC CHECK" "check prints its title"
 has "$out" "ES8389" "check identifies the card"
-has "$out" "capture path:" "check prints the capture path heading"
-line_has "$out" "^  ADC MUX +AMIC$" "check shows the ADC mux is analog"
-line_has "$out" "^  Mic Jack +on$" "check shows the Mic Jack pin switch"
-line_has "$out" "^  ADCL +0\.00dB$" "check shows the capture volume in dB"
-line_has "$out" "^  ADCL PGA +24\.00dB$" "check shows the analog PGA gain"
-line_has "$out" "^  PGAL Select +DifferentialL$" "check shows the left input mux"
-line_has "$out" "^  PGAR Select +DifferentialR$" "check shows the right input mux"
+line_has "$out" "card 1 +\[ES8389Audio\]" "check shows a compact card label, not a truncated line"
+hasnt "$out" "ES8389-Aud║" "the card line is not cut mid-word"
+line_has "$out" "ADC MUX +AMIC +Mic Jack +on" "check shows the analog mux and pin switch"
+line_has "$out" "ADCL +0\.00dB +ADCL PGA +24\.00dB" "check shows capture volume and PGA gain"
+line_has "$out" "PGAL Select +DifferentialL" "check shows the left input mux"
+line_has "$out" "PGAR Select +DifferentialR" "check shows the right input mux"
 has "$out" "mic is picking up signal" "check passes on a real signal"
 [ "$rc" = 0 ] && ok "check exits 0 on signal" || bad "check rc=$rc on signal"
 [ -z "$(find "$D" -name '*.wav' 2>/dev/null)" ] && ok "check leaves no probe file behind" || bad "check leaked a probe wav"
 wide "mic check output" "$out"
+boxed "mic check screen" "$out"
 
 reset_calls
 export CZ_TEST_TONE=0
 out=$(rec "$D" check 2>&1); rc=$?
 export CZ_TEST_TONE=1
 has "$out" "SILENT" "check reports a silent mic"
-has "$out" "Mic Jack off" "check lists the pin switch as a likely cause"
+has "$out" "check Mic Jack / ADC MUX" "check names the pin switch as a likely cause"
 has "$out" "cz-record gain 210" "check suggests raising the capture gain"
 [ "$rc" = 4 ] && ok "check exits 4 on silence" || bad "check rc=$rc on silence"
-wide "silent check output" "$out"
+boxed "silent mic check screen" "$out"
 
 echo "=== cz-record gain ==="
 reset_calls
@@ -270,18 +308,23 @@ echo "=== cz-record menu (interactive) ==="
 D="$WORK/r8"; mkdir -p "$D"; reset_calls
 seed "$D" demo 5
 out=$(printf '400' | rec "$D" 2>&1); echo "$out"
-has "$out" "== RECORDER ==" "menu prints its title"
+has "$out" "RECORDER" "menu prints its title"
+has "$out" "saved" "menu reports the recording count"
+has "$out" "mic ok" "menu reports that the card is present"
 has "$out" "1 Record" "menu offers Record"
 has "$out" "4 Mic check" "menu offers Mic check"
-has "$out" "== MIC CHECK ==" "menu item 4 runs the mic check"
+has "$out" "MIC CHECK" "menu item 4 runs the mic check"
 wide "menu output" "$out"
+boxed "recorder menu screen" "$out"
 
 echo "=== cz-record pick screen ==="
 out=$(printf '0' | rec "$D" play 2>&1); echo "$out"
-has "$out" "== RECORDINGS ==" "pick lists the recordings"
+has "$out" "RECORDINGS" "pick lists the recordings"
 has "$out" "1 demo" "pick shows the seeded recording"
 has "$out" "0 Back" "pick offers Back"
+has "$out" "play which?" "pick shows its prompt"
 wide "pick output" "$out"
+boxed "pick screen" "$out"
 
 echo "=== usage ==="
 out=$(bash "$CZ" bogus 2>&1); rc=$?
