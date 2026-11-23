@@ -22,8 +22,8 @@ temp() { printf '%s' '45.0°C'; }
 
 render_main() {
     hdr "CARDPUTER ZERO" main
-    row2 1 "Camera" 5 "IR"; row2 2 "Music" 6 "System"; row2 3 "News" 7 "Logout"
-    row2 4 "WiFi" 8 "Recorder"; row1 0 "CLI"
+    row2 1 "Camera" 5 "IR"; row2 2 "Music" 6 "System"; row2 3 "News" 7 "CLI"
+    row2 4 "WiFi" 8 "Recorder"; row1 0 "Logout"
     bsep
     brow "  press a number to select" "${DIM}  press a number to select${R}"
     bbot

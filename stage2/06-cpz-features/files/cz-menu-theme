@@ -281,9 +281,9 @@ while :; do
     hdr "CARDPUTER ZERO" main
     row2 1 "Camera" 5 "IR"
     row2 2 "Music"  6 "System"
-    row2 3 "News"   7 "Logout"
+    row2 3 "News"   7 "CLI"
     row2 4 "WiFi"   8 "Recorder"
-    row1 0 "CLI"
+    row1 0 "Logout"
     bsep
     brow "  press a number to select" "${DIM}  press a number to select${R}"
     bbot
@@ -295,8 +295,8 @@ while :; do
       4) m_net ;;
       5) m_ir ;;
       6) m_system ;;
-      7) do_logout ;;
+      7) clear; tmux -f /etc/cz-tmux.conf new-session -A -s main ;;
       8) need cz-record && cz-record ;;
-      0) clear; tmux -f /etc/cz-tmux.conf new-session -A -s main ;;
+      0) do_logout ;;
     esac
 done
