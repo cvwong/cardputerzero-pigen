@@ -1,6 +1,7 @@
 #!/bin/bash -e
 install -D -m 0755 files/cz-status        "${ROOTFS_DIR}/usr/local/bin/cz-status"
 install -D -m 0755 files/cz-net           "${ROOTFS_DIR}/usr/local/bin/cz-net"
+install -D -m 0755 files/cz-camera-present "${ROOTFS_DIR}/usr/local/bin/cz-camera-present"
 install -D -m 0755 files/cz               "${ROOTFS_DIR}/usr/local/bin/cz"
 install -D -m 0644 files/cz-tmux.conf     "${ROOTFS_DIR}/etc/cz-tmux.conf"
 install -D -m 0644 files/cz-autostart.sh  "${ROOTFS_DIR}/etc/profile.d/cz-autostart.sh"

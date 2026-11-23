@@ -288,7 +288,7 @@ while :; do
     bbot
     read -r -n1 -s k
     case "$k" in
-      1) need camera_app && cz-camera ;;
+      1) if cz-camera-present; then need camera_app && cz-camera; else echo "No camera detected"; sleep 2; fi ;;
       2) need cmus && cmus ;;
       3) need newsboat && cz-news ;;
       4) m_net ;;
