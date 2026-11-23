@@ -48,7 +48,7 @@ hdr() { clear; printf '== %s ==\n' "$1"
           system) mid="BL: $(bl)/$(blm)" ;;
           *)      mid="Date: $(date +%Y-%m-%d)" ;;
         esac
-        if [ "$mode" = system ]; then third="Temp: $(temp)"; else third="Time: $(date +%H:%M)"; fi
+        if [ "$mode" = system ]; then third="Temp: $(temp)"; else third="Time: $(date +%I:%M%P)"; fi
         printf 'Battery: %s  %s  %s\n' "$(bat)" "$mid" "$third"; }
 
 menu() {
@@ -118,7 +118,8 @@ m_system() {
     menu SYSTEM system \
       "Audio"         '!m_audio' \
       "Display"       '!m_display' \
-      "Hostname"        'cz-hostname'
+      "Hostname"        'cz-hostname' \
+      "Power"         '!m_power'
 }
 
 m_display() {
@@ -161,9 +162,8 @@ while :; do
     hdr "CARDPUTER ZERO" main
     echo ' 1 Camera      5 IR'
     echo ' 2 Music       6 System'
-    echo ' 3 News        7 Power'
-    echo ' 4 WiFi        8 Logout'
-    echo ' 0 CLI'
+    echo ' 3 News        7 Logout'
+    echo ' 4 WiFi        0 CLI'
     read -r -n1 -s k
     case "$k" in
       1) need camera_app && cz-camera ;;
@@ -172,8 +172,7 @@ while :; do
       4) m_net ;;
       5) m_ir ;;
       6) m_system ;;
-      7) m_power ;;
-      8) do_logout ;;
+      7) do_logout ;;
       0) clear; tmux -f /etc/cz-tmux.conf new-session -A -s main ;;
     esac
 done

@@ -22,8 +22,8 @@ temp() { printf '%s' '45.0°C'; }
 
 render_main() {
     hdr "CARDPUTER ZERO" main
-    row2 1 "Camera" 5 "IR"; row2 2 "Music" 6 "System"; row2 3 "News" 7 "Power"
-    row2 4 "WiFi" 8 "Logout"; row1 0 "CLI"
+    row2 1 "Camera" 5 "IR"; row2 2 "Music" 6 "System"; row2 3 "News" 7 "Logout"
+    row2 4 "WiFi" 0 "CLI"
     bsep
     brow "  press a number to select" "${DIM}  press a number to select${R}"
     bbot
@@ -31,12 +31,12 @@ render_main() {
 render_sub() {
     hdr "AUDIO" audio
     row1 1 "Volume +5%"; row1 2 "Volume -5%"; row1 3 "Mute toggle"
-    row1 4 "Speaker test"; row1 5 "All controls"; row1 6 "Save levels"
+    row1 4 "Speaker test"; row1 5 "Save levels"
     row1 0 "Back"; bbot
 }
 render_system() {
     hdr "SYSTEM" system
-    row1 1 "Audio"; row1 2 "Display"
+    row1 1 "Audio"; row1 2 "Display"; row1 3 "Hostname"; row1 4 "Power"
     row1 0 "Back"; bbot
 }
 render_display() {
@@ -69,6 +69,7 @@ case "$main_s" in *"Battery:"*"Date:"*"Time:"*) ;; *) st=1 ;; esac
 case "$sub_s" in *"Vol:"*) ;; *) st=1 ;; esac
 case "$sys_s" in *"BL:"*"Temp:"*) ;; *) st=1 ;; esac
 case "$disp_s" in *"BL:"*) ;; *) st=1 ;; esac
+[[ "$main_s" =~ Time:\ [0-9][0-9]:[0-9][0-9](am|pm) ]] || { st=1; echo "  !! main Time not in am/pm"; }
 echo "status fields (main=Battery/Date/Time, audio=Vol, system=BL/Temp, display=BL): $([ $st = 0 ] && echo OK || echo FAIL)"
 # ask must confirm only on y/Y; anything else (incl. Enter) is No.
 printf 'y'  | ask "Q?" >/dev/null; r1=$?

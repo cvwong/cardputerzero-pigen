@@ -114,7 +114,7 @@ hdr() {
     btop
     title_row "$1"
     local mode="${2:-main}" bv tv dv midp midc tp tc
-    bv=$(bat); tv=$(date +%H:%M); dv=$(date +%Y-%m-%d)
+    bv=$(bat); tv=$(date +%I:%M%P); dv=$(date +%Y-%m-%d)
     case "$mode" in
       audio)  midp="Vol: $(vol)";      midc="${DIM}Vol:${R} ${LBL}$(vol)${R}" ;;
       system) midp="BL: $(bl)/$(blm)"; midc="${DIM}BL:${R} ${LBL}$(bl)/$(blm)${R}" ;;
@@ -226,7 +226,8 @@ m_system() {
     menu SYSTEM system \
       "Audio"         '!m_audio' \
       "Display"       '!m_display' \
-      "Hostname"        'm_hostname'
+      "Hostname"        'm_hostname' \
+      "Power"         '!m_power'
 }
 
 m_display() {
@@ -280,9 +281,8 @@ while :; do
     hdr "CARDPUTER ZERO" main
     row2 1 "Camera" 5 "IR"
     row2 2 "Music"  6 "System"
-    row2 3 "News"   7 "Power"
-    row2 4 "WiFi"   8 "Logout"
-    row1 0 "CLI"
+    row2 3 "News"   7 "Logout"
+    row2 4 "WiFi"   0 "CLI"
     bsep
     brow "  press a number to select" "${DIM}  press a number to select${R}"
     bbot
@@ -294,8 +294,7 @@ while :; do
       4) m_net ;;
       5) m_ir ;;
       6) m_system ;;
-      7) m_power ;;
-      8) do_logout ;;
+      7) do_logout ;;
       0) clear; tmux -f /etc/cz-tmux.conf new-session -A -s main ;;
     esac
 done
