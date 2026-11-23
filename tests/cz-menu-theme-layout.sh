@@ -31,7 +31,7 @@ render_main() {
 render_sub() {
     hdr "AUDIO" audio
     row1 1 "Volume +5%"; row1 2 "Volume -5%"; row1 3 "Mute toggle"
-    row1 4 "Speaker test"; row1 5 "Save levels"
+    row1 4 "Speaker test"; row1 5 "Voice recorder"; row1 6 "Save levels"
     row1 0 "Back"; bbot
 }
 render_system() {

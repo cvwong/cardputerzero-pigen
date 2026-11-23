@@ -29,6 +29,7 @@ install -D -m 0644 files/asound.conf "${ROOTFS_DIR}/etc/asound.conf"
 install -D -m 0755 files/cz-menu "${ROOTFS_DIR}/usr/local/bin/cz-menu"
 install -D -m 0755 files/cz-menu-theme "${ROOTFS_DIR}/usr/local/bin/cz-menu-theme"
 install -D -m 0755 files/cz-ir "${ROOTFS_DIR}/usr/local/bin/cz-ir"
+install -D -m 0755 files/cz-record "${ROOTFS_DIR}/usr/local/bin/cz-record"
 install -D -m 0755 files/cz-font "${ROOTFS_DIR}/usr/local/bin/cz-font"
 HN=$(cat "${ROOTFS_DIR}/etc/hostname")
 sed -i '/^127\.0\.1\.1[[:space:]]/d' "${ROOTFS_DIR}/etc/hosts"
