@@ -34,8 +34,7 @@ iface_label() {
     esac
 }
 
-# Always prompt, even with one adapter. brcmfmac exposes wlan0 and wlan1,
-# so a USB dongle is usually wlan2 - enumerate, never guess by name.
+# Report which bus a WiFi interface sits on: usb / mmc (internal) / other.
 iface_bus() {
     local p; p=$(readlink -f "/sys/class/net/$1/device" 2>/dev/null)
     case "$p" in
@@ -45,19 +44,8 @@ iface_bus() {
     esac
 }
 
-# wlan0 is the primary internal radio. brcmfmac also exposes an auxiliary
-# interface, so anything else must be a USB dongle to be selectable.
-iface_bus() {
-    local p; p=$(readlink -f "/sys/class/net/$1/device" 2>/dev/null)
-    case "$p" in
-        *usb*) echo usb ;;
-        *mmc*) echo mmc ;;
-        *)     echo other ;;
-    esac
-}
-
-# wlan0 is the primary internal radio. brcmfmac also exposes an auxiliary
-# interface, so anything else must be a USB dongle to be selectable.
+# wlan0 is the primary internal radio; anything else must be a USB dongle
+# to be selectable.
 check_iface() {
     [ -d "/sys/class/net/$IFACE" ] || { echo "no such interface: $IFACE"; return 1; }
     if [ "$IFACE" != wlan0 ] && [ "$(iface_bus "$IFACE")" != usb ]; then
@@ -67,6 +55,8 @@ check_iface() {
     fi
 }
 
+# Always prompt, even with one adapter. brcmfmac exposes wlan0 and wlan1,
+# so a USB dongle is usually wlan2 - enumerate, never guess by name.
 pick_iface() {
     local -a devs=()
     mapfile -t devs < <(nmcli -t -f DEVICE,TYPE device 2>/dev/null \

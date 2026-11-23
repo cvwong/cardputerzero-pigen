@@ -57,7 +57,7 @@ eq "signal not shifted (chan)"   "Chan   6" "$(echo "$out" | sed -n 4p)"
 eq "signal bars for 82%"         "Bars   #####" "$(echo "$out" | sed -n 5p)"
 
 echo "=== cz-wifi scan (pick 1 = Cafe:Guest) ==="
-out=$(printf '1\nsecretpw\n' | bash "$CZ" scan); echo "$out"
+out=$(printf '1\nsecretpw\n' | bash "$CZ" scan wlan0); echo "$out"
 has  "$out" "Cafe:Guest"  "scan shows decoded colon SSID"
 hasnt "$out" 'Cafe\:Guest' "scan has no leftover escape"
 has  "$out" "82% WPA1 WPA2" "scan signal/security aligned"
@@ -71,14 +71,14 @@ eq "join got decoded SSID" \
 
 echo "=== cz-wifi scan (pick 2 = back\\slash) ==="
 : > "$CZ_TEST_CALLS"
-out=$(printf '2\npw2\n' | bash "$CZ" scan)
+out=$(printf '2\npw2\n' | bash "$CZ" scan wlan0)
 eq "join got backslash SSID decoded" \
   'connection add type wifi con-name back\slash ifname wlan0 ssid back\slash wifi.hidden no wifi-sec.key-mgmt wpa-psk wifi-sec.psk pw2' \
   "$(grep 'connection add' "$CZ_TEST_CALLS")"
 
 echo "=== cz-wifi scan (pick 5 = open network) ==="
 : > "$CZ_TEST_CALLS"
-out=$(printf '5\n' | bash "$CZ" scan)
+out=$(printf '5\n' | bash "$CZ" scan wlan0)
 eq "open network join without psk" \
   "connection add type wifi con-name OpenNet ifname wlan0 ssid OpenNet wifi.hidden no" \
   "$(grep 'connection add' "$CZ_TEST_CALLS")"
