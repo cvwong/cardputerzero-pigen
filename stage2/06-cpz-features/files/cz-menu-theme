@@ -277,7 +277,9 @@ need() {
     return 1
 }
 
-while :; do
+# Main screen. Kept as a function so tests/cz-menu-theme-layout.sh can render the
+# real thing instead of a hand-copied mirror that can silently drift.
+main_screen() {
     hdr "CARDPUTER ZERO" main
     row2 1 "Camera" 5 "IR"
     row2 2 "Music"  6 "System"
@@ -287,6 +289,10 @@ while :; do
     bsep
     brow "  press a number to select" "${DIM}  press a number to select${R}"
     bbot
+}
+
+while :; do
+    main_screen
     read -r -n1 -s k
     case "$k" in
       1) if cz-camera-present; then need camera_app && cz-camera; else echo "No camera detected"; sleep 2; fi ;;

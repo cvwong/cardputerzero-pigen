@@ -20,30 +20,16 @@ blm() { printf '%s' '100'; }
 vol() { printf '%s' '40%'; }
 temp() { printf '%s' '45.0°C'; }
 
-render_main() {
-    hdr "CARDPUTER ZERO" main
-    row2 1 "Camera" 5 "IR"; row2 2 "Music" 6 "System"; row2 3 "News" 7 "CLI"
-    row2 4 "WiFi" 8 "Recorder"; row1 0 "Logout"
-    bsep
-    brow "  press a number to select" "${DIM}  press a number to select${R}"
-    bbot
-}
-render_sub() {
-    hdr "AUDIO" audio
-    row1 1 "Volume +5%"; row1 2 "Volume -5%"; row1 3 "Mute toggle"
-    row1 4 "Speaker test"; row1 5 "Save levels"
-    row1 0 "Back"; bbot
-}
-render_system() {
-    hdr "SYSTEM" system
-    row1 1 "Audio"; row1 2 "Display"; row1 3 "Hostname"; row1 4 "Power"
-    row1 0 "Back"; bbot
-}
-render_display() {
-    hdr "DISPLAY" system
-    row1 1 "Backlight +"; row1 2 "Backlight -"
-    row1 0 "Back"; bbot
-}
+# Render the real screens from cz-menu-theme rather than a hand-copied mirror, so
+# this test cannot silently drift from the menu it is supposed to be checking.
+# menu() draws the whole screen before reading a key, so feeding it the Back key
+# makes it render exactly once and return without executing any menu command.
+# Repeated so a stray earlier read cannot leave us looping on EOF.
+Z='0000000000'
+render_main()    { main_screen; }
+render_sub()     { printf '%s' "$Z" | m_audio; }
+render_system()  { printf '%s' "$Z" | m_system; }
+render_display() { printf '%s' "$Z" | m_display; }
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }
 check() {
     local label="$1" body="$2" bad=0 w l rows
@@ -53,6 +39,9 @@ check() {
         w=${#l}; [ "$w" -ne 53 ] && { echo "  !! width $w (want 53): [$l]"; bad=1; }
     done <<< "$body"
     rows=$(printf '%s\n' "$body" | wc -l)
+    # A render that silently produced too little would still satisfy the width
+    # loop and the row budget, so require a plausible minimum as well.
+    [ "$rows" -lt 6 ] && { echo "  !! only $rows rows - render looks empty/truncated"; bad=1; }
     echo "  rows=$rows (console=14, tmux~13)  widths_ok=$([ $bad = 0 ] && echo yes || echo NO)"
     [ "$bad" = 0 ] && [ "$rows" -le 13 ]
 }
@@ -71,6 +60,24 @@ case "$sys_s" in *"BL:"*"Temp:"*) ;; *) st=1 ;; esac
 case "$disp_s" in *"BL:"*) ;; *) st=1 ;; esac
 [[ "$main_s" =~ Time:\ [0-9][0-9]:[0-9][0-9](am|pm) ]] || { st=1; echo "  !! main Time not in am/pm"; }
 echo "status fields (main=Battery/Date/Time, audio=Vol, system=BL/Temp, display=BL): $([ $st = 0 ] && echo OK || echo FAIL)"
+# Every key the main screen advertises must have a matching case branch in the
+# real script, and every case branch must be advertised. This is what catches a
+# menu edit that updated the labels but forgot the dispatch, or the reverse.
+bind=0
+rendered=$(printf '%s\n' "$main_s" | grep -v 'Battery:' \
+    | grep -oE '[0-9] [A-Z][A-Za-z]*' | awk '{print $1}' | sort -u)
+dispatched=$(grep -oE '^      [0-9]\)' "$SRC" | grep -oE '[0-9]' | sort -u)
+# NB: do not reuse a/b/s/d/c here -- those hold the check() results.
+for key in $rendered; do
+    printf '%s\n' "$dispatched" | grep -qx "$key" \
+        || { echo "  !! main screen shows key $key but no case branch handles it"; bind=1; }
+done
+for key in $dispatched; do
+    printf '%s\n' "$rendered" | grep -qx "$key" \
+        || { echo "  !! case branch $key is not shown on the main screen"; bind=1; }
+done
+echo "main screen keys match the case dispatch: $([ $bind = 0 ] && echo OK || echo FAIL)"
+echo "  rendered=[$(echo $rendered | tr -s ' ')] dispatched=[$(echo $dispatched | tr -s ' ')]"
 # ask must confirm only on y/Y; anything else (incl. Enter) is No.
 printf 'y'  | ask "Q?" >/dev/null; r1=$?
 printf 'Y'  | ask "Q?" >/dev/null; r2=$?
@@ -79,4 +86,4 @@ printf '\n' | ask "Q?" >/dev/null; r4=$?
 beh=0; [ "$r1" = 0 ] && [ "$r2" = 0 ] && [ "$r3" = 1 ] && [ "$r4" = 1 ] || beh=1
 echo "ask accepts y/Y only (y=$r1 Y=$r2 n=$r3 enter=$r4): $([ $beh = 0 ] && echo OK || echo FAIL)"
 echo
-if [ "$a" = 0 ] && [ "$b" = 0 ] && [ "$s" = 0 ] && [ "$d" = 0 ] && [ "$c" = 0 ] && [ "$beh" = 0 ] && [ "$st" = 0 ]; then echo "LAYOUT OK"; else echo "LAYOUT PROBLEM"; exit 1; fi
+if [ "$a" = 0 ] && [ "$b" = 0 ] && [ "$s" = 0 ] && [ "$d" = 0 ] && [ "$c" = 0 ] && [ "$beh" = 0 ] && [ "$st" = 0 ] && [ "$bind" = 0 ]; then echo "LAYOUT OK"; else echo "LAYOUT PROBLEM"; exit 1; fi
