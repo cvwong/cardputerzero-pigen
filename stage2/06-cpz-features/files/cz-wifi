@@ -130,7 +130,17 @@ radio() {
 }
 
 scan() {
-    pick_iface || return 1
+    if [ -n "${1:-}" ]; then
+        IFACE="$1"
+        if [ "$IFACE" != wlan0 ] && [ "$(iface_bus "$IFACE")" != usb ]; then
+            echo "no USB WiFi dongle on $IFACE"
+            echo "plug one in, or select wlan0"
+            sleep 2
+            return 1
+        fi
+    else
+        pick_iface || return 1
+    fi
     echo "scanning..."
     nmcli device wifi rescan ifname "$IFACE" >/dev/null 2>&1
     sleep 3
@@ -167,7 +177,17 @@ scan() {
 }
 
 hidden() {
-    pick_iface || return 1
+    if [ -n "${1:-}" ]; then
+        IFACE="$1"
+        if [ "$IFACE" != wlan0 ] && [ "$(iface_bus "$IFACE")" != usb ]; then
+            echo "no USB WiFi dongle on $IFACE"
+            echo "plug one in, or select wlan0"
+            sleep 2
+            return 1
+        fi
+    else
+        pick_iface || return 1
+    fi
     printf 'SSID: '; read -r ssid
     [ -n "$ssid" ] || { echo cancelled; return 0; }
     printf 'password (blank=open): '; read -r pw
