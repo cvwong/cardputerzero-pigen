@@ -23,7 +23,7 @@ temp() { printf '%s' '45.0°C'; }
 render_main() {
     hdr "CARDPUTER ZERO" main
     row2 1 "Camera" 5 "IR"; row2 2 "Music" 6 "System"; row2 3 "News" 7 "Logout"
-    row2 4 "WiFi" 0 "CLI"
+    row2 4 "WiFi" 8 "Recorder"; row1 0 "CLI"
     bsep
     brow "  press a number to select" "${DIM}  press a number to select${R}"
     bbot
@@ -31,7 +31,7 @@ render_main() {
 render_sub() {
     hdr "AUDIO" audio
     row1 1 "Volume +5%"; row1 2 "Volume -5%"; row1 3 "Mute toggle"
-    row1 4 "Speaker test"; row1 5 "Voice recorder"; row1 6 "Save levels"
+    row1 4 "Speaker test"; row1 5 "Save levels"
     row1 0 "Back"; bbot
 }
 render_system() {
