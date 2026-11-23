@@ -6,15 +6,10 @@ DIR="${CZ_RECORD_DIR:-$HOME/Recordings}"
 RATE="${CZ_RECORD_RATE:-48000}"
 CH="${CZ_RECORD_CH:-1}"
 FMT="${CZ_RECORD_FMT:-S16_LE}"
-# "ADC[LR] Capture Volume" is declared as -95.5dB + 0.5dB/step, so the register
-# reset value of 0 is effectively silence. 191 == 0 dBFS.
+# "ADCL"/"ADCR" capture volume is declared as -95.5dB + 0.5dB/step, so 0 would be
+# effectively silent. 191 == 0 dBFS, which is also what this driver already sets.
 GAIN="${CZ_RECORD_GAIN:-191}"
-PGA="${CZ_RECORD_PGA:-8}"          # DT default: snd_def-ADC[LR]_PGA_Volume = <8>
 PROBE_SEC="${CZ_RECORD_PROBE:-2}"
-# Mic bias rail is m5ioe1 pin 3, which cardputerzero-v5-overlay also exports as
-# the grove_5v_out LED (default-state "off"). mic-pyg4-high-overlay hogs the same
-# line high, but the upstream config_setup never applies it on v5.
-MIC_LED="${CZ_RECORD_MIC_LED:-/sys/class/leds/grove_5v_out/brightness}"
 CARDS="${CZ_RECORD_CARDS:-/proc/asound/cards}"
 
 have()  { command -v "$1" >/dev/null 2>&1; }
@@ -22,22 +17,27 @@ pause() { printf '\npress any key'; read -r -n1 -s _; }
 
 card_ok() { grep -q ES8389 "$CARDS" 2>/dev/null; }
 
-mic_led_get() { cat "$MIC_LED" 2>/dev/null; }
-mic_led_set() { [ -w "$MIC_LED" ] && printf '%s' "$1" > "$MIC_LED" 2>/dev/null
-                return 0; }
-
-# Bring up the capture path. PGAL/PGAR Select are left alone on purpose: the card
-# drives them from hp-det-gpios (Line 1P/1N with no headphones, which is the mic).
+# Bring up the capture path. Measured on real hardware (czero1, 2026-11-24): the
+# driver and DT already leave ADC MUX=AMIC, Mic Jack=on and ADCL/ADCR at 191, so
+# this is defence against a bad `alsactl restore`, not a required setup step.
+# Note the ALSA simple-control names are the short ones ("ADCL", not
+# "ADCL Capture Volume"); amixer strips the Volume/Switch suffixes.
+# PGAL/PGAR Select and the ADC PGA gain are deliberately left alone: PGA 14 was
+# measured to clip (peak -0.0dB) and the DT default of 8 (24dB) is correct.
 setup_mic() {
-    local c
-    for c in 'ADC MUX|AMIC' 'Mic Jack Switch|on' 'Mic Jack|on'; do
-        amixer -c "$CARD" sset "${c%%|*}" "${c##*|}" >/dev/null 2>&1
-    done
-    amixer -c "$CARD" sset 'ADCL Capture Volume' "$GAIN" >/dev/null 2>&1
-    amixer -c "$CARD" sset 'ADCR Capture Volume' "$GAIN" >/dev/null 2>&1
-    amixer -c "$CARD" sset 'ADCL PGA Volume' "$PGA"     >/dev/null 2>&1
-    amixer -c "$CARD" sset 'ADCR PGA Volume' "$PGA"     >/dev/null 2>&1
-    mic_led_set 1
+    amixer -c "$CARD" sset 'ADC MUX' AMIC >/dev/null 2>&1
+    amixer -c "$CARD" sset 'Mic Jack' on  >/dev/null 2>&1
+    amixer -c "$CARD" sset 'ADCL' "$GAIN" >/dev/null 2>&1
+    amixer -c "$CARD" sset 'ADCR' "$GAIN" >/dev/null 2>&1
+}
+
+# ctl <name> — one line of the capture path's current state, for `check`.
+ctl() {
+    local v
+    v=$(amixer -c "$CARD" sget "$1" 2>/dev/null \
+        | grep -oE "Item0: '[^']*'|\[(on|off)\]|\[-?[0-9.]+dB\]" | head -1 \
+        | sed -e "s/^Item0: '//" -e "s/'$//" -e 's/^\[//' -e 's/\]$//')
+    printf '  %-13s %s\n' "$1" "${v:-?}"
 }
 
 # level <wav> -> "SECONDS PEAK_DB RMS_DB"; audioop is gone in py3.13, use array.
@@ -90,6 +90,16 @@ resolve() {
     return 1
 }
 
+# True while <pid> is still running. `kill -0` is not enough: a child that has
+# exited but not yet been reaped is a zombie and still answers to it, which would
+# spin the loop below forever once arecord stops on its own (e.g. -d expired).
+running() {
+    local s
+    [ -r "/proc/$1/stat" ] || return 1
+    s=$(sed -e 's/.*) //' -e 's/ .*//' "/proc/$1/stat" 2>/dev/null)
+    [ -n "$s" ] && [ "$s" != Z ]
+}
+
 # Run <cmd> in the background, tick a clock, and stop it on the first keypress.
 # SIGINT (not SIGKILL) so arecord writes a correct WAV header. Elapsed time comes
 # from the clock, not a loop counter: with no tty on stdin `read -t 1` returns
@@ -101,7 +111,7 @@ run_timed() {
     local pid=$! start t
     start=$(date +%s)
     if [ -t 0 ]; then
-        while kill -0 "$pid" 2>/dev/null; do
+        while running "$pid"; do
             t=$(( $(date +%s) - start ))
             printf '\r  %s %02d:%02d  ' "$label" $((t/60)) $((t%60))
             read -r -t 1 -n1 -s _ && break
@@ -114,21 +124,31 @@ run_timed() {
 }
 
 do_record() {
-    local name="${1:-}" ts out prev dur peak rms
+    local name="${1:-}" secs="${2:-}" ts out dur peak rms
     card_ok  || { echo "no ES8389 sound card"; return 1; }
     have arecord || { echo "arecord not installed"; return 1; }
     mkdir -p "$DIR" || { echo "cannot create $DIR"; return 1; }
+
+    # Without a tty there is no key to stop on, so a duration is mandatory --
+    # otherwise the capture would run until the SD card filled.
+    local -a cmd=(arecord -q -D "$CAPDEV" -f "$FMT" -c "$CH" -r "$RATE")
+    if [ -n "$secs" ]; then
+        [[ "$secs" =~ ^[0-9]+$ ]] || { echo "seconds must be a number"; return 1; }
+        cmd+=(-d "$secs")
+    elif [ ! -t 0 ]; then
+        echo "not a tty: give a duration, e.g."
+        echo "  cz-record rec note 10"
+        return 1
+    fi
 
     ts=$(date +%Y%m%d-%H%M%S)
     if [ -n "$name" ]; then out="$DIR/${name}-${ts}.wav"
     else out="$DIR/REC-${ts}.wav"; fi
 
-    prev=$(mic_led_get)
     setup_mic
     printf 'rec -> %.46s\n  speak now%s\n' "${out##*/}" \
-        "$([ -t 0 ] && echo ', any key to stop')"
-    run_timed 'rec' arecord -q -D "$CAPDEV" -f "$FMT" -c "$CH" -r "$RATE" "$out"
-    [ -n "$prev" ] && mic_led_set "$prev"
+        "$([ -t 0 ] && [ -z "$secs" ] && echo ', any key to stop')"
+    run_timed 'rec' "${cmd[@]}" "$out"
 
     if [ ! -s "$out" ]; then
         rm -f "$out"; echo "nothing captured"; return 4
@@ -190,41 +210,31 @@ do_list() {
 
 # Record a short probe and report whether the mic actually produced signal.
 do_check() {
-    local tmp prev dur peak rms
+    local tmp dur peak rms
     card_ok || { echo "no ES8389 sound card"; return 1; }
     have arecord || { echo "arecord not installed"; return 1; }
 
     echo "== MIC CHECK =="
     grep ES8389 "$CARDS" 2>/dev/null | head -1 | cut -c1-53
-    if [ -e "$MIC_LED" ]; then
-        printf 'mic bias: %s  writable: %s\n' "$(mic_led_get)" \
-            "$([ -w "$MIC_LED" ] && echo yes || echo no)"
-    else
-        echo 'mic bias led: not exported'
-    fi
-    echo "  ${MIC_LED:0:51}"
-    echo "capture controls:"
-    amixer -c "$CARD" scontrols 2>/dev/null \
-        | grep -iE 'adc|mic|pga|capture' | cut -c1-51 | sed 's/^/  /'
-    echo "current: $(amixer -c "$CARD" sget 'ADCL Capture Volume' 2>/dev/null | grep -o '\[[0-9]*\]' | head -1)"
+    echo "capture path:"
+    ctl 'ADC MUX'; ctl 'Mic Jack'; ctl 'ADCL'
+    ctl 'ADCL PGA'; ctl 'PGAL Select'; ctl 'PGAR Select'
 
     tmp=$(mktemp /tmp/cz-micprobe-XXXXXX.wav) || return 1
-    prev=$(mic_led_get)
     setup_mic
-    printf '\nprobing %ss - speak now\n' "$PROBE_SEC"
+    printf 'probing %ss - speak now\n' "$PROBE_SEC"
     arecord -q -D "$CAPDEV" -f "$FMT" -c "$CH" -r "$RATE" -d "$PROBE_SEC" "$tmp" < /dev/null
-    [ -n "$prev" ] && mic_led_set "$prev"
 
     set -- $(level "$tmp"); dur="$1"; peak="$2"; rms="$3"
     rm -f "$tmp"
     printf 'result: %ss  peak %sdB  rms %sdB\n' "$dur" "$peak" "$rms"
     if silent "$peak"; then
         echo '-> SILENT. Likely causes:'
-        echo '   1. mic bias off (needs 1 when'
-        echo '      recording; see above)'
-        echo '   2. gain too low:'
+        echo '   1. Mic Jack off, or ADC MUX set'
+        echo '      to DMIC (see above)'
+        echo '   2. capture gain too low:'
         echo '      cz-record gain 210'
-        echo '   3. Mic Jack / ADC MUX not routed'
+        echo '   3. another process holds the card'
         return 4
     fi
     echo '-> mic is picking up signal'
@@ -234,9 +244,9 @@ do_gain() {
     local g="${1:?usage: cz-record gain <0-255>  (191 = 0dB)}"
     [[ "$g" =~ ^[0-9]+$ ]] && [ "$g" -le 255 ] || { echo "gain must be 0-255"; return 1; }
     GAIN="$g"
-    amixer -c "$CARD" sset 'ADCL Capture Volume' "$GAIN" >/dev/null 2>&1 \
-        || { echo "no ADCL Capture Volume control"; return 1; }
-    amixer -c "$CARD" sset 'ADCR Capture Volume' "$GAIN" >/dev/null 2>&1
+    amixer -c "$CARD" sset 'ADCL' "$GAIN" >/dev/null 2>&1 \
+        || { echo "no ADCL capture control"; return 1; }
+    amixer -c "$CARD" sset 'ADCR' "$GAIN" >/dev/null 2>&1
     printf 'capture volume = %s (%s dB)\n' "$GAIN" \
         "$(awk -v g="$GAIN" 'BEGIN{printf "%.1f", -95.5 + g*0.5}')"
     echo 'persist with: Audio menu -> Save levels'
@@ -291,7 +301,7 @@ do_menu() {
 }
 
 case "${1:-}" in
-  rec)   shift; do_record "${1:-}" ;;
+  rec)   do_record "${2:-}" "${3:-}" ;;
   play)  do_play   "${2:-}" ;;
   del)   do_delete "${2:-}" ;;
   rm)    do_delete "${2:-}" ;;
@@ -301,7 +311,7 @@ case "${1:-}" in
   gain)  do_gain "${2:-}" ;;
   '')    do_menu ;;
   *)     echo 'usage: cz-record <command>'
-         echo '  rec [name]     record a voice memo'
+         echo '  rec [name] [s] record a voice memo'
          echo '  play <n|name>  play a recording'
          echo '  del  <n|name>  delete a recording'
          echo '  list           list recordings'
