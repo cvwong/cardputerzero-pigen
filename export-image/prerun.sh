@@ -46,8 +46,23 @@ until ensure_next_loopdev && LOOP_DEV="$(losetup --show --find --partscan "$IMG_
 done
 
 ensure_loopdev_partitions "$LOOP_DEV"
+
+# Poll for partition device nodes to actually exist (race between losetup --partscan and udev)
 BOOT_DEV="${LOOP_DEV}p1"
 ROOT_DEV="${LOOP_DEV}p2"
+for attempt in $(seq 1 20); do
+	if [ -b "$BOOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
+		break
+	fi
+	echo "Waiting for partition devices... (attempt $attempt)"
+	sleep 0.5
+done
+
+if [ ! -b "$BOOT_DEV" ] || [ ! -b "$ROOT_DEV" ]; then
+	echo "ERROR: partition devices did not appear after 10 seconds"
+	ls -l /dev/${LOOP_DEV}*
+	exit 1
+fi
 
 ROOT_FEATURES="^huge_file"
 for FEATURE in 64bit; do
