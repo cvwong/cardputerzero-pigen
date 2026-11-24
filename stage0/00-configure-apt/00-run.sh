@@ -1,5 +1,8 @@
 #!/bin/bash -e
-echo "nameserver 192.168.52.248" > "${ROOTFS_DIR}/etc/resolv.conf"
+# Resolver for the build chroot, so apt can resolve names during the build.
+# Overridable from the environment or the gitignored `config`; a machine-local
+# address belongs there rather than in this tracked file.
+echo "nameserver ${BUILD_NAMESERVER:-1.1.1.1}" > "${ROOTFS_DIR}/etc/resolv.conf"
 true > "${ROOTFS_DIR}/etc/apt/sources.list"
 install -m 644 files/debian.sources "${ROOTFS_DIR}/etc/apt/sources.list.d/"
 install -m 644 files/raspi.sources "${ROOTFS_DIR}/etc/apt/sources.list.d/"

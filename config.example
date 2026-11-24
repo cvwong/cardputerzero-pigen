@@ -13,3 +13,9 @@ DISABLE_FIRST_BOOT_USER_RENAME=0
 ENABLE_SSH=1
 WPA_COUNTRY='MY'
 ENABLE_CLOUD_INIT=0
+
+# Resolver written into the build chroot's /etc/resolv.conf so apt can resolve
+# during the build. Defaults to 1.1.1.1 (stage0/00-configure-apt/00-run.sh).
+# Set a machine-local resolver in your own `config`, which is gitignored --
+# this file is published, so do not put a private address here.
+#BUILD_NAMESERVER='1.1.1.1'
