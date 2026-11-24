@@ -19,9 +19,10 @@ CARDS="${CZ_RECORD_CARDS:-/proc/asound/cards}"
 
 card_ok() { grep -q ES8389 "$CARDS" 2>/dev/null; }
 
-# Bring up the capture path. Measured on real hardware (czero1, 2026-11-24): the
-# driver and DT already leave ADC MUX=AMIC, Mic Jack=on and ADCL/ADCR at 191, so
-# this is defence against a bad `alsactl restore`, not a required setup step.
+# Bring up the capture path. Measured on real hardware (a CardputerZero,
+# 2026-11-24): the driver and DT already leave ADC MUX=AMIC, Mic Jack=on and
+# ADCL/ADCR at 191, so this is defence against a bad `alsactl restore`, not a
+# required setup step.
 # Note the ALSA simple-control names are the short ones ("ADCL", not
 # "ADCL Capture Volume"); amixer strips the Volume/Switch suffixes.
 # PGAL/PGAR Select and the ADC PGA gain are deliberately left alone: PGA 14 was
