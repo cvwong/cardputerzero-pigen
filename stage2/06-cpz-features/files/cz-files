@@ -138,8 +138,11 @@ do_browse() {
                 if [ "${entries[i]%%$'\t'*}" = d ]; then
                     row1 "$(( i + 1 ))" "${n:0:40}/"
                 else
-                    f=$(du -h --apparent-size "$ROOT/$n" 2>/dev/null | cut -f1)
-                    row1 "$(( i + 1 ))" "$(printf '%-28.28s %6s' "${n:0:28}" "${f:-?}")"
+                    # du -h prints bare "10" for a 10-byte file; numfmt always
+                    # carries a unit so the column is unambiguous.
+                    f=$(stat -c %s "$ROOT/$n" 2>/dev/null)
+                    f=$(numfmt --to=iec --suffix=B "${f:-0}" 2>/dev/null) || f="?"
+                    row1 "$(( i + 1 ))" "$(printf '%-27.27s %7s' "${n:0:27}" "${f:-?}")"
                 fi
             done
             [ "$pages" -gt 1 ] && \

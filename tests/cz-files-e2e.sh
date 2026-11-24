@@ -154,6 +154,15 @@ P=$(free_port); export CZ_FILES_PORT="$P"
 out=$(printf '2%s\n0' "$WORK/does-not-exist" | bash "$CZ" 2>&1)
 has "$(strip "$out")" "Not a directory" "rejects a folder that does not exist"
 
+echo "=== browse screen shows sizes with units ==="
+printf '0123456789' > "$ROOT/tenbytes"   # exactly 10 bytes
+out=$(printf '0' | bash "$CZ" browse 2>&1)
+boxed "browse screen" "$out"
+bs=$(strip "$out")
+has "$bs" "tenbytes" "browse lists the file"
+has "$bs" "10B" "size carries a unit (regression: du -h printed a bare '10')"
+has "$bs" "$ROOT" "browse names the folder it is showing"
+
 echo "=== usage ==="
 out=$(bash "$CZ" bogus 2>&1); rc=$?
 has "$out" "usage: cz-files" "unknown subcommand prints usage"
