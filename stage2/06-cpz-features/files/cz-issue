@@ -1,0 +1,64 @@
+#!/bin/bash
+# cz-issue — regenerate /etc/issue as a fully bordered 53-column box for the
+# tty1 login banner.
+#
+# Run from getty@tty1's ExecStartPre, i.e. immediately before agetty prints the
+# banner. It has to be generated rather than static: the hostname is changeable
+# with cz-hostname and the address is DHCP-assigned, so a fixed file cannot keep
+# the right-hand border aligned behind variable-width values -- and agetty's own
+# \n / \4 escapes are substituted after the file is read, leaving no way to pad.
+#
+# Deliberately standalone and monochrome. This runs pre-login during early boot,
+# where it must not depend on cz-theme.sh (which probes amixer when sourced) and
+# must not fail: any problem leaves the previous banner untouched rather than
+# blanking the login screen. Widths are correct by construction -- the content
+# is pure ASCII, so ${#t} counts characters even in the C locale, and the rules
+# are built by substituting into an exactly-padded string.
+#
+# The 53-column width must stay in sync with cz-theme.sh's box.
+set -u
+
+OUT="${CZ_ISSUE_OUT:-/etc/issue}"
+WIDTH="${CZ_ISSUE_WIDTH:-53}"
+INNER=$(( WIDTH - 2 ))
+
+host=$(hostname 2>/dev/null || uname -n 2>/dev/null || printf 'cardputerzero')
+ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+[ -n "$ip" ] || ip="no address yet"
+
+title="C A R D P U T E R   Z E R O"
+detail="CM0 console  -  ${host}  -  ${ip}"
+
+pad() { printf '%*s' "$1" ''; }
+
+# rule <left-corner> <right-corner>
+rule() { local s; s=$(pad "$INNER"); printf '%s%s%s\n' "$1" "${s// /═}" "$2"; }
+
+# centre <border> <text> — text truncated to INNER, then centred within it.
+centre() {
+    local t="${2:0:$INNER}" len l r
+    len=${#t}
+    l=$(( (INNER - len) / 2 ))
+    r=$(( INNER - len - l ))
+    printf '%s%s%s%s%s\n' "$1" "$(pad "$l")" "$t" "$(pad "$r")" "$1"
+}
+
+tmp=$(mktemp "${OUT}.XXXXXX") || exit 0
+{
+    rule '╔' '╗'
+    centre '║' "$title"
+    centre '║' ''
+    centre '║' "$detail"
+    rule '╚' '╝'
+} > "$tmp" 2>/dev/null
+
+# Swap in the new banner only if it came out the expected shape, and atomically,
+# so agetty can never read a half-written file.
+if [ -s "$tmp" ] && [ "$(wc -l < "$tmp")" = 5 ]; then
+    chmod 0644 "$tmp"
+    chown root:root "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$OUT"
+else
+    rm -f "$tmp"
+fi
+exit 0
