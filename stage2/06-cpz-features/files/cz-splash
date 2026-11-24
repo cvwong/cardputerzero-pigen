@@ -13,7 +13,35 @@ fd=os.open("/dev/tty1",os.O_RDWR)
 fcntl.ioctl(fd,0x4B3A,1 if sys.argv[1]=="g" else 0)
 os.close(fd)' "$1"
 }
-trap 'vtmode t; setfont -C /dev/tty1 "$CZ_FONT" 2>/dev/null' EXIT TERM INT
+
+# Switching the VT to KD_GRAPHICS detaches fbcon, and the panel-mipi-dbid DRM
+# driver then powers the panel down -- /sys/class/graphics/fb0/blank reads 4
+# (FB_BLANK_POWERDOWN) even though consoleblank=0 and lcd-console already ran
+# `setterm --blank 0 --powerdown 0`. Restoring KD_TEXT does not power it back
+# on, so the login banner agetty draws next goes into a dark panel and the
+# device looks dead. Unblank explicitly via FBIOBLANK on the way out.
+unblank() {
+  python3 -c 'import os,fcntl,sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDWR)
+    fcntl.ioctl(fd, 0x4611, 0)   # FBIOBLANK, VESA_NO_BLANKING
+    os.close(fd)
+except Exception:
+    pass' "$FB" 2>/dev/null
+}
+
+# Log the panel state either side of the unblank so the journal settles whether
+# the graphics blit is really what powers the panel down, instead of leaving it
+# a theory.
+restore_console() {
+  local b="/sys/class/graphics/${FB##*/}/blank"
+  vtmode t
+  setfont -C /dev/tty1 "$CZ_FONT" 2>/dev/null
+  echo "cz-splash: blank before unblank=$(cat "$b" 2>/dev/null)"
+  unblank
+  echo "cz-splash: blank after unblank=$(cat "$b" 2>/dev/null)"
+}
+trap restore_console EXIT TERM INT
 
 start=$(date +%s)
 
