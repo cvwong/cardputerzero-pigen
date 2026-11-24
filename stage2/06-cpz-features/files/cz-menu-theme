@@ -89,8 +89,8 @@ sysinfo() {
 
 m_audio() {
     menu AUDIO audio \
-      "Volume +5%"    'volstep 5%+' \
-      "Volume -5%"    'volstep 5%-' \
+      "Volume +5%"    '!volstep 5%+' \
+      "Volume -5%"    '!volstep 5%-' \
       "Mute toggle"   'amixer -c "$CARD" sset Speaker toggle' \
       "Speaker test"  'speaker-test -D default -c 2 -t sine -l 1' \
       "Save levels"   'sudo alsactl store; echo saved'
