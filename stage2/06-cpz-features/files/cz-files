@@ -2,12 +2,15 @@
 # cz-files — on-demand file transfer for the CardputerZero.
 #
 # Puts a themed menu on the LCD and, while that menu is open, serves a web UI on
-# the LAN so files can be pushed to and pulled off the device from a phone or PC.
-# The server is started on entry and killed on exit, so nothing is listening
-# except during an active transfer session.
+# the LAN so files can be pushed to and pulled off the device from a phone or PC,
+# several at a time, into folders the user creates in the browser.
 #
-# The heavy lifting is in cz-files-web.py. Every request must carry the random
-# token shown on the LCD, so merely being on the LAN is not enough.
+# The server is started here and killed when this script exits, so a read/write/
+# delete endpoint is never listening outside an active session.
+#
+# Sign-in uses the device account this runs as (see cz-files-web.py). It is plain
+# HTTP, so the password crosses the LAN unencrypted -- acceptable for a
+# short-lived server on a trusted network, not something to expose further.
 CZ_THEME="${CZ_THEME:-/usr/local/lib/cz-theme.sh}"
 [ -r "$CZ_THEME" ] || { echo "cz-files: cannot read $CZ_THEME" >&2; exit 1; }
 . "$CZ_THEME"
@@ -16,19 +19,9 @@ WEB="${CZ_FILES_WEB:-/usr/local/lib/cz-files-web.py}"
 PORT="${CZ_FILES_PORT:-8765}"     # falls back to an OS-chosen port if taken
 ROOT="${CZ_FILES_ROOT:-$HOME}"
 LOG="${CZ_FILES_LOG:-/tmp/cz-files-web.$$}"
-
-# new_token — exactly 10 hex characters (40 bits) from the kernel CSPRNG.
-# Filtering /dev/urandom through tr for alphanumerics is not usable here: 32
-# random bytes contain only ~7 alphanumerics on average, so the token length
-# varied. od over a fixed byte count is always the same width, which also keeps
-# the displayed URL inside the 53-column box.
-new_token() { od -An -N5 -tx1 /dev/urandom | tr -d ' \n'; }
-
-TOKEN="${CZ_FILES_TOKEN:-$(new_token)}"
+USER_NAME=$(id -un 2>/dev/null || echo "${USER:-user}")
 SRV_PID=""
 URL=""
-
-have_python() { have python3; }
 
 # stop_server — kill the web server and forget its URL. Safe to call repeatedly.
 stop_server() {
@@ -41,8 +34,8 @@ stop_server() {
     URL=""
 }
 
-# Always take the server down with us: leaving a file read/write/delete endpoint
-# listening after the menu closes would defeat the point of starting it on demand.
+# Always take the server down with us: leaving it listening after the menu closes
+# would defeat the point of starting it on demand.
 cleanup() { stop_server; rm -f "$LOG"; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
@@ -52,17 +45,16 @@ trap 'cleanup; exit 143' TERM
 # Returns non-zero if it never came up.
 start_server() {
     local want="${1:-$PORT}" i
-    have_python || return 2
+    have python3 || return 2
     [ -r "$WEB" ] || return 3
     [ -d "$ROOT" ] || return 4
     stop_server
     : > "$LOG"
-    python3 "$WEB" --root "$ROOT" --port "$want" --token "$TOKEN" >> "$LOG" 2>&1 &
+    python3 "$WEB" --root "$ROOT" --port "$want" >> "$LOG" 2>&1 &
     SRV_PID=$!
     for i in $(seq 1 50); do
-        # Match on the last " url=" rather than a fixed prefix: the shared root
-        # may legitimately contain spaces.
-        URL=$(sed -n 's/.* url=//p' "$LOG" 2>/dev/null | head -1)
+        # Take only up to the first space: the log line continues with " user=".
+        URL=$(sed -n 's/.* url=\([^ ]*\).*/\1/p' "$LOG" 2>/dev/null | head -1)
         [ -n "$URL" ] && return 0
         kill -0 "$SRV_PID" 2>/dev/null || break
         sleep 0.1
@@ -86,16 +78,15 @@ free_space() { df -h --output=avail "$ROOT" 2>/dev/null | tail -1 | tr -d ' '; }
 info() { brow "$1" "$2"; }
 
 fail_screen() {
-    local title="$1" detail="$2"
     hdr_lite "FILES"
-    info "  $title" "  ${BAD}$title${R}"
-    info "  ${detail:0:47}" "  ${DIM}${detail:0:47}${R}"
+    info "  $1" "  ${BAD}$1${R}"
+    info "  ${2:0:47}" "  ${DIM}${2:0:47}${R}"
     bbot
     pause
 }
 
-# prompt_path <current> — ask for a new shared folder. Empty input keeps the
-# current one, mirroring how m_hostname treats a blank line as "cancel".
+# prompt_path — ask for a new shared folder. Empty input keeps the current one,
+# mirroring how m_hostname treats a blank line as "cancel".
 prompt_path() {
     local new
     hdr_lite "SHARED FOLDER"
@@ -105,7 +96,7 @@ prompt_path() {
     printf '\e[?25h  > '
     read -r new
     [ -n "$new" ] || return 1
-    # Expand a leading ~ so a path typed from the keyboard behaves as expected.
+    # Expand a leading ~ so a path typed on the keyboard behaves as expected.
     case "$new" in "~"/*) new="$HOME/${new#\~/}" ;; "~") new="$HOME" ;; esac
     if [ ! -d "$new" ]; then
         fail_screen "Not a directory" "$new"
@@ -138,7 +129,7 @@ do_browse() {
                 if [ "${entries[i]%%$'\t'*}" = d ]; then
                     row1 "$(( i + 1 ))" "${n:0:40}/"
                 else
-                    # du -h prints bare "10" for a 10-byte file; numfmt always
+                    # du -h prints a bare "10" for a 10-byte file; numfmt always
                     # carries a unit so the column is unambiguous.
                     f=$(stat -c %s "$ROOT/$n" 2>/dev/null)
                     f=$(numfmt --to=iec --suffix=B "${f:-0}" 2>/dev/null) || f="?"
@@ -151,6 +142,8 @@ do_browse() {
         fi
         row1 0 "Back"
         bbot
+        # `|| return` matters: without it a closed stdin makes read fail forever
+        # and this loop redraws in a tight spin.
         read -r -n1 -s k || return
         case "$k" in
           0) return ;;
@@ -162,7 +155,7 @@ do_browse() {
 
 do_menu() {
     local k
-    if ! have_python; then
+    if ! have python3; then
         fail_screen "python3 missing" "the web UI needs python3"
         return 1
     fi
@@ -177,23 +170,20 @@ do_menu() {
             info "  web server: stopped" "  ${DIM}web server:${R} ${BAD}stopped${R}"
             info "  start it to transfer files" "  ${DIM}start it to transfer files${R}"
         fi
+        info "  sign in: $USER_NAME + device password" \
+             "  ${DIM}sign in:${R} ${LBL}$USER_NAME${R} ${DIM}+ device password${R}"
         info "$(printf '  root %-26.26s %5s free' "${ROOT/#$HOME/\~}" "$(free_space)")" \
              "$(printf '  %sroot %-26.26s%s %s%5s free%s' "$DIM" "${ROOT/#$HOME/\~}" "$R" "$LBL" "$(free_space)" "$R")"
         row1 1 "Start web server"
         row1 2 "Shared folder"
-        row1 3 "New token"
-        row1 4 "Browse files"
+        row1 3 "Browse files"
         row1 0 "Back (stops server)"
         bbot
-        # `|| return` matters: without it a closed stdin makes read fail forever
-        # and this loop redraws the menu in a tight spin.
         read -r -n1 -s k || return
         case "$k" in
-          1) if ensure_server; then :; else fail_screen "Server failed to start" "$(head -1 "$LOG" 2>/dev/null)"; fi ;;
+          1) ensure_server || fail_screen "Server failed to start" "$(head -1 "$LOG" 2>/dev/null)" ;;
           2) if prompt_path; then ensure_server; fi ;;
-          3) TOKEN=$(new_token)
-             ensure_server ;;
-          4) do_browse ;;
+          3) do_browse ;;
           0) return ;;
         esac
     done
@@ -207,9 +197,9 @@ case "${1:-}" in
                                head -3 "$LOG" >&2 2>/dev/null; exit 1; }
            echo "$URL"
            wait "$SRV_PID" 2>/dev/null ;;
-  token)   echo "$TOKEN" ;;
+  user)    echo "$USER_NAME" ;;
   browse)  do_browse ;;
   '')      do_menu ;;
-  *)       echo 'usage: cz-files [start | token | browse]'
+  *)       echo 'usage: cz-files [start | user | browse]'
            exit 1 ;;
 esac

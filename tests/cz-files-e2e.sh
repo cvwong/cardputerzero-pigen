@@ -18,7 +18,6 @@ export CZ_THEME="$HERE/../stage2/06-cpz-features/files/cz-theme.sh"
 export CZ_FILES_WEB="$HERE/../stage2/06-cpz-features/files/cz-files-web.py"
 export CZ_FILES_ROOT="$ROOT"
 export CZ_FILES_LOG="$WORK/srv.log"
-export CZ_FILES_TOKEN="abc1234567"
 
 printf '#!/bin/bash\nexit 0\n' > "$MOCK/clear"; chmod +x "$MOCK/clear"
 export PATH="$MOCK:$PATH"
@@ -57,19 +56,10 @@ boxed() {
     return $b
 }
 
-echo "=== token generation (regression: used to be 4 chars, not the intended width) ==="
-# Unset the fixed test token, otherwise this measures the fixture, not the generator.
-for i in 1 2 3 4 5; do
-    t=$(env -u CZ_FILES_TOKEN bash "$CZ" token)
-    if [ "${#t}" = 10 ] && [[ "$t" =~ ^[0-9a-f]{10}$ ]]; then
-        ok "token $i is exactly 10 hex chars ($t)"
-    else
-        bad "token $i is wrong: '$t' (len ${#t})"
-    fi
-done
-t1=$(env -u CZ_FILES_TOKEN bash "$CZ" token)
-t2=$(env -u CZ_FILES_TOKEN bash "$CZ" token)
-[ "$t1" != "$t2" ] && ok "tokens differ between runs" || bad "token is not random: $t1 twice"
+echo "=== the account the web UI will authenticate against ==="
+u=$(bash "$CZ" user)
+if [ "$u" = "$(id -un)" ]; then ok "reports the invoking account ($u)"
+else bad "user subcommand gave '$u', expected $(id -un)"; fi
 
 echo "=== start: prints a working URL ==="
 P=$(free_port); export CZ_FILES_PORT="$P"
@@ -80,13 +70,15 @@ for _ in $(seq 1 60); do [ -s "$WORK/url.txt" ] && break; sleep 0.15; done
 URL=$(cat "$WORK/url.txt")
 echo "  url=$URL"
 has "$URL" "http://" "URL has a scheme"
-has "$URL" "token=$CZ_FILES_TOKEN" "URL carries the configured token"
 has "$URL" ":$P" "URL uses the requested port"
+hasnt "$URL" "token=" "the URL carries no token now that login is used"
+hasnt "$URL" "user=" "the printed URL stops before the log line's user= field"
 c=$(CURL -o "$WORK/idx" -w '%{http_code}' "$URL")
-[ "$c" = 200 ] && ok "the printed URL serves 200" || bad "URL gave HTTP $c"
-has "$(cat "$WORK/idx")" "hello.txt" "index lists the shared folder's contents"
-c=$(CURL -o /dev/null -w '%{http_code}' "http://127.0.0.1:$P/")
-[ "$c" = 403 ] && ok "requests without the token are refused" || bad "no-token request gave $c"
+[ "$c" = 200 ] && ok "the printed URL serves the sign-in page (200)" || bad "URL gave HTTP $c"
+has "$(cat "$WORK/idx")" 'type="password"' "an anonymous visitor gets a sign-in form"
+hasnt "$(cat "$WORK/idx")" "hello.txt" "an anonymous visitor cannot see any filename"
+c=$(CURL -o /dev/null -w '%{http_code}' "http://127.0.0.1:$P/download?path=hello.txt")
+[ "$c" = 403 ] && ok "download without a session is refused" || bad "anonymous download gave $c"
 
 echo "=== the server must die with cz-files ==="
 PYPID=$(pgrep -P "$SPID" 2>/dev/null | head -1)
@@ -133,9 +125,11 @@ s=$(strip "$out")
 has "$s" "FILES" "menu title is FILES"
 has "$s" "1 Start web server" "offers Start web server"
 has "$s" "2 Shared folder" "offers changing the shared folder"
-has "$s" "3 New token" "offers a new token"
-has "$s" "4 Browse files" "offers browsing"
+has "$s" "3 Browse files" "offers browsing"
 has "$s" "0 Back (stops server)" "Back says it stops the server"
+hasnt "$s" "New token" "the token menu entry is gone"
+has "$s" "sign in: $(id -un)" "shows which device account to sign in as"
+has "$s" "device password" "says the sign-in uses the device password"
 has "$s" "http://" "shows the URL to visit"
 has "$s" "$ROOT" "shows the shared root"
 if port_open "$P"; then bad "LEAK: leaving the menu left the server listening"; else ok "leaving the menu stopped the server"; fi
