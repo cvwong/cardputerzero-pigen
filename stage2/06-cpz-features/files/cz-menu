@@ -25,6 +25,13 @@ vol() { if [ -n "$VC" ]; then
 volstep() { [ -n "$VC" ] && { amixer -c "$CARD" sset "$VC" "$1" unmute >/dev/null 2>&1
                               amixer -c "$CARD" sset DACR "$1" unmute >/dev/null 2>&1; }; }
 
+MENU_MSG=""; MENU_MSG_UNTIL=0
+note() { MENU_MSG="$1"; MENU_MSG_UNTIL=$(( $(date +%s) + 3 )); }
+save_levels() {
+    if sudo alsactl store 2>/dev/null; then note "levels saved"
+    else note "save failed"; fi
+}
+
 bat() { for p in /sys/class/power_supply/*; do
           [ -r "$p/capacity" ] && { printf '%s%%' "$(cat "$p/capacity")"; return; }
         done; printf '?'; }
@@ -64,6 +71,9 @@ menu() {
             printf ' %d %s\n' "$((i+1))" "${labels[i]}"
         done
         echo ' 0 Back'
+        if [ -n "$MENU_MSG" ] && [ "$(date +%s)" -lt "$MENU_MSG_UNTIL" ]; then
+            echo " $MENU_MSG"
+        fi
         read -r -n1 -s k
         [ "$k" = 0 ] && return
         if [[ "$k" =~ ^[1-9]$ ]] && [ "$k" -le "${#cmds[@]}" ]; then
@@ -93,7 +103,7 @@ m_audio() {
       "Volume -5%"    '!volstep 5%-' \
       "Mute toggle"   'amixer -c "$CARD" sset Speaker toggle' \
       "Speaker test"  'speaker-test -D default -c 2 -t sine -l 1' \
-      "Save levels"   'sudo alsactl store; echo saved'
+      "Save levels"   '!save_levels'
 }
 
 m_net() {
