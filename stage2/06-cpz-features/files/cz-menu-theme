@@ -171,7 +171,7 @@ main_screen() {
     row2 2 "Music"  6 "System"
     row2 3 "News"   7 "CLI"
     row2 4 "WiFi"   8 "Recorder"
-    row1 0 "Logout"
+    row2 9 "Files"  0 "Logout"
     bsep
     brow "  press a number to select" "${DIM}  press a number to select${R}"
     bbot
@@ -189,6 +189,7 @@ while :; do
       6) m_system ;;
       7) clear; tmux -f /etc/cz-tmux.conf new-session -A -s main ;;
       8) need cz-record && cz-record ;;
+      9) need cz-files && cz-files ;;
       0) do_logout ;;
     esac
 done

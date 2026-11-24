@@ -1,0 +1,212 @@
+#!/bin/bash
+# cz-files — on-demand file transfer for the CardputerZero.
+#
+# Puts a themed menu on the LCD and, while that menu is open, serves a web UI on
+# the LAN so files can be pushed to and pulled off the device from a phone or PC.
+# The server is started on entry and killed on exit, so nothing is listening
+# except during an active transfer session.
+#
+# The heavy lifting is in cz-files-web.py. Every request must carry the random
+# token shown on the LCD, so merely being on the LAN is not enough.
+CZ_THEME="${CZ_THEME:-/usr/local/lib/cz-theme.sh}"
+[ -r "$CZ_THEME" ] || { echo "cz-files: cannot read $CZ_THEME" >&2; exit 1; }
+. "$CZ_THEME"
+
+WEB="${CZ_FILES_WEB:-/usr/local/lib/cz-files-web.py}"
+PORT="${CZ_FILES_PORT:-8765}"     # falls back to an OS-chosen port if taken
+ROOT="${CZ_FILES_ROOT:-$HOME}"
+LOG="${CZ_FILES_LOG:-/tmp/cz-files-web.$$}"
+
+# new_token — exactly 10 hex characters (40 bits) from the kernel CSPRNG.
+# Filtering /dev/urandom through tr for alphanumerics is not usable here: 32
+# random bytes contain only ~7 alphanumerics on average, so the token length
+# varied. od over a fixed byte count is always the same width, which also keeps
+# the displayed URL inside the 53-column box.
+new_token() { od -An -N5 -tx1 /dev/urandom | tr -d ' \n'; }
+
+TOKEN="${CZ_FILES_TOKEN:-$(new_token)}"
+SRV_PID=""
+URL=""
+
+have_python() { have python3; }
+
+# stop_server — kill the web server and forget its URL. Safe to call repeatedly.
+stop_server() {
+    if [ -n "$SRV_PID" ]; then
+        kill "$SRV_PID" 2>/dev/null
+        # Reap it, otherwise it lingers as a zombie holding the port.
+        wait "$SRV_PID" 2>/dev/null
+    fi
+    SRV_PID=""
+    URL=""
+}
+
+# Always take the server down with us: leaving a file read/write/delete endpoint
+# listening after the menu closes would defeat the point of starting it on demand.
+cleanup() { stop_server; rm -f "$LOG"; }
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+# start_server [port] — launch the web UI and wait for it to report its URL.
+# Returns non-zero if it never came up.
+start_server() {
+    local want="${1:-$PORT}" i
+    have_python || return 2
+    [ -r "$WEB" ] || return 3
+    [ -d "$ROOT" ] || return 4
+    stop_server
+    : > "$LOG"
+    python3 "$WEB" --root "$ROOT" --port "$want" --token "$TOKEN" >> "$LOG" 2>&1 &
+    SRV_PID=$!
+    for i in $(seq 1 50); do
+        # Match on the last " url=" rather than a fixed prefix: the shared root
+        # may legitimately contain spaces.
+        URL=$(sed -n 's/.* url=//p' "$LOG" 2>/dev/null | head -1)
+        [ -n "$URL" ] && return 0
+        kill -0 "$SRV_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    stop_server
+    return 1
+}
+
+# ensure_server — start on the preferred port, retrying on an OS-chosen one if
+# the preferred port is already taken.
+ensure_server() {
+    start_server "$PORT" && return 0
+    start_server 0
+}
+
+server_up() { [ -n "$SRV_PID" ] && kill -0 "$SRV_PID" 2>/dev/null; }
+
+free_space() { df -h --output=avail "$ROOT" 2>/dev/null | tail -1 | tr -d ' '; }
+
+# info <plain> <colored>
+info() { brow "$1" "$2"; }
+
+fail_screen() {
+    local title="$1" detail="$2"
+    hdr_lite "FILES"
+    info "  $title" "  ${BAD}$title${R}"
+    info "  ${detail:0:47}" "  ${DIM}${detail:0:47}${R}"
+    bbot
+    pause
+}
+
+# prompt_path <current> — ask for a new shared folder. Empty input keeps the
+# current one, mirroring how m_hostname treats a blank line as "cancel".
+prompt_path() {
+    local new
+    hdr_lite "SHARED FOLDER"
+    info "  current: ${ROOT:0:39}" "  ${DIM}current:${R} ${LBL}${ROOT:0:39}${R}"
+    info "  blank = keep current" "  ${DIM}blank = keep current${R}"
+    bbot
+    printf '\e[?25h  > '
+    read -r new
+    [ -n "$new" ] || return 1
+    # Expand a leading ~ so a path typed from the keyboard behaves as expected.
+    case "$new" in "~"/*) new="$HOME/${new#\~/}" ;; "~") new="$HOME" ;; esac
+    if [ ! -d "$new" ]; then
+        fail_screen "Not a directory" "$new"
+        return 1
+    fi
+    ROOT=$(cd "$new" && pwd)
+    return 0
+}
+
+do_browse() {
+    local -a entries
+    local show=8 page=0 total f n i start end pages
+    while :; do
+        # Directories first: %y sorts 'd' before 'f' ascending.
+        mapfile -t entries < <(find "$ROOT" -mindepth 1 -maxdepth 1 -printf '%y\t%f\n' 2>/dev/null \
+            | sort -t$'\t' -k1,1 -k2,2)
+        total=${#entries[@]}
+        pages=$(( (total + show - 1) / show )); [ "$pages" -lt 1 ] && pages=1
+        [ "$page" -ge "$pages" ] && page=$(( pages - 1 ))
+        [ "$page" -lt 0 ] && page=0
+        hdr_lite "FILES IN ROOT"
+        info "  ${ROOT:0:47}" "  ${DIM}${ROOT:0:47}${R}"
+        if [ "$total" = 0 ]; then
+            info "  (empty)" "  ${DIM}(empty)${R}"
+        else
+            start=$(( page * show )); end=$(( start + show ))
+            [ "$end" -gt "$total" ] && end=$total
+            for (( i=start; i<end; i++ )); do
+                n="${entries[i]#*$'\t'}"
+                if [ "${entries[i]%%$'\t'*}" = d ]; then
+                    row1 "$(( i + 1 ))" "${n:0:40}/"
+                else
+                    f=$(du -h --apparent-size "$ROOT/$n" 2>/dev/null | cut -f1)
+                    row1 "$(( i + 1 ))" "$(printf '%-28.28s %6s' "${n:0:28}" "${f:-?}")"
+                fi
+            done
+            [ "$pages" -gt 1 ] && \
+                info "  $(( start + 1 ))-$end of $total   8 next / 9 prev" \
+                     "  ${DIM}$(( start + 1 ))-$end of $total   8 next / 9 prev${R}"
+        fi
+        row1 0 "Back"
+        bbot
+        read -r -n1 -s k || return
+        case "$k" in
+          0) return ;;
+          8) [ "$pages" -gt 1 ] && page=$(( (page + 1) % pages )) ;;
+          9) [ "$pages" -gt 1 ] && page=$(( (page + pages - 1) % pages )) ;;
+        esac
+    done
+}
+
+do_menu() {
+    local k
+    if ! have_python; then
+        fail_screen "python3 missing" "the web UI needs python3"
+        return 1
+    fi
+    ensure_server
+    while :; do
+        hdr "FILES" main
+        if server_up; then
+            info "  web server: running" \
+                 "  ${DIM}web server:${R} ${OK}running${R}"
+            info "  ${URL:0:49}" "  ${ACCENT}${URL:0:49}${R}"
+        else
+            info "  web server: stopped" "  ${DIM}web server:${R} ${BAD}stopped${R}"
+            info "  start it to transfer files" "  ${DIM}start it to transfer files${R}"
+        fi
+        info "$(printf '  root %-26.26s %5s free' "${ROOT/#$HOME/\~}" "$(free_space)")" \
+             "$(printf '  %sroot %-26.26s%s %s%5s free%s' "$DIM" "${ROOT/#$HOME/\~}" "$R" "$LBL" "$(free_space)" "$R")"
+        row1 1 "Start web server"
+        row1 2 "Shared folder"
+        row1 3 "New token"
+        row1 4 "Browse files"
+        row1 0 "Back (stops server)"
+        bbot
+        # `|| return` matters: without it a closed stdin makes read fail forever
+        # and this loop redraws the menu in a tight spin.
+        read -r -n1 -s k || return
+        case "$k" in
+          1) if ensure_server; then :; else fail_screen "Server failed to start" "$(head -1 "$LOG" 2>/dev/null)"; fi ;;
+          2) if prompt_path; then ensure_server; fi ;;
+          3) TOKEN=$(new_token)
+             ensure_server ;;
+          4) do_browse ;;
+          0) return ;;
+        esac
+    done
+}
+
+# CLI surface. `start` runs the server in the foreground and prints its URL,
+# which is what makes it usable from a test or a shell; there is no separate
+# stop/url because the EXIT trap takes the server down whenever this script ends.
+case "${1:-}" in
+  start)   ensure_server || { echo "cz-files: server failed to start" >&2
+                               head -3 "$LOG" >&2 2>/dev/null; exit 1; }
+           echo "$URL"
+           wait "$SRV_PID" 2>/dev/null ;;
+  token)   echo "$TOKEN" ;;
+  browse)  do_browse ;;
+  '')      do_menu ;;
+  *)       echo 'usage: cz-files [start | token | browse]'
+           exit 1 ;;
+esac

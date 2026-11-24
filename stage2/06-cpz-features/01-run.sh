@@ -33,12 +33,16 @@ CHROOT
 install -D -m 0644 files/issue.cz "${ROOTFS_DIR}/etc/issue"
 install -D -m 0644 files/asound.conf "${ROOTFS_DIR}/etc/asound.conf"
 # Shared 53x14 theme (palette, box drawing, hdr/row helpers) sourced by both
-# cz-menu-theme and cz-record, so it must be in place before either runs.
+# cz-menu-theme, cz-record and cz-files, so it must be in place before they run.
 install -D -m 0644 files/cz-theme.sh  "${ROOTFS_DIR}/usr/local/lib/cz-theme.sh"
 install -D -m 0755 files/cz-menu "${ROOTFS_DIR}/usr/local/bin/cz-menu"
 install -D -m 0755 files/cz-menu-theme "${ROOTFS_DIR}/usr/local/bin/cz-menu-theme"
 install -D -m 0755 files/cz-ir "${ROOTFS_DIR}/usr/local/bin/cz-ir"
 install -D -m 0755 files/cz-record "${ROOTFS_DIR}/usr/local/bin/cz-record"
+# File transfer web UI. The server lives in /usr/local/lib next to the theme
+# because cz-files launches it as a child rather than putting it on PATH.
+install -D -m 0755 files/cz-files "${ROOTFS_DIR}/usr/local/bin/cz-files"
+install -D -m 0755 files/cz-files-web.py "${ROOTFS_DIR}/usr/local/lib/cz-files-web.py"
 install -D -m 0755 files/cz-font "${ROOTFS_DIR}/usr/local/bin/cz-font"
 HN=$(cat "${ROOTFS_DIR}/etc/hostname")
 sed -i '/^127\.0\.1\.1[[:space:]]/d' "${ROOTFS_DIR}/etc/hosts"
