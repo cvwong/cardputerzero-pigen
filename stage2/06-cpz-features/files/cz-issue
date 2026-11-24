@@ -24,10 +24,20 @@ INNER=$(( WIDTH - 2 ))
 
 host=$(hostname 2>/dev/null || uname -n 2>/dev/null || printf 'cardputerzero')
 ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-[ -n "$ip" ] || ip="no address yet"
 
 title="C A R D P U T E R   Z E R O"
-detail="CM0 console  -  ${host}  -  ${ip}"
+# Omit the address entirely when there is not one yet. Getty starts well before
+# Wi-Fi associates -- measured 22.98s vs a 40.17s lease, so ~17s apart -- and the
+# banner is only ever regenerated when getty respawns. A placeholder would
+# therefore sit on the login screen looking broken, and repainting to replace it
+# would clear the screen and discard a username the user is mid-way through
+# typing (agetty holds that input, and no session exists yet for a guard to see).
+# So: no placeholder, no repaint. The address appears from the next login prompt.
+if [ -n "$ip" ]; then
+    detail="CM0 console  -  ${host}  -  ${ip}"
+else
+    detail="CM0 console  -  ${host}"
+fi
 
 pad() { printf '%*s' "$1" ''; }
 

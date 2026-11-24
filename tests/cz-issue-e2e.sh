@@ -28,6 +28,7 @@ fail=0
 ok()  { printf 'PASS: %s\n' "$1"; }
 bad() { printf 'FAIL: %s\n' "$1"; fail=1; }
 has() { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3 — missing [$2] in: $1" ;; esac; }
+hasnt() { case "$1" in *"$2"*) bad "$3 — unexpected [$2] in: $1" ;; *) ok "$3" ;; esac; }
 
 gen() { # gen <host> <ips> [width]
     rm -f "$OUT"
@@ -88,11 +89,29 @@ l=${#lead}; r=$(( ${#det} - ${#rest} ))
 if [ $(( l - r )) -le 1 ] && [ $(( r - l )) -le 1 ]; then ok "detail line is centred (left $l / right $r)"
 else bad "detail line is off-centre (left $l / right $r)"; fi
 
-echo "=== no address yet (early boot, network down) ==="
+echo "=== no address yet (early boot, Wi-Fi not associated) ==="
 gen czero-test ''
 widths "no-ip" 53
 boxshape "no-ip"
-has "$(cat "$OUT")" "no address yet" "missing address degrades to a placeholder"
+noip=$(cat "$OUT")
+has "$noip" "CM0 console  -  czero-test" "hostname is still shown without an address"
+hasnt "$noip" "no address yet" "no placeholder text that would never be updated"
+hasnt "$noip" "czero-test  -" "address segment omitted cleanly, no dangling separator"
+
+echo "=== regression: nothing may repaint the banner behind agetty's back ==="
+# Restarting getty to refresh the box clears the screen and throws away a
+# username the user is mid-way through typing. agetty holds that input and no
+# session exists yet, so no "is the console idle" check can protect it.
+if compgen -G "$HERE/../stage2/*/files/*cz-issue*dispatcher" >/dev/null 2>&1; then
+    bad "a cz-issue dispatcher is back; it would wipe the login prompt"
+else
+    ok "no dispatcher that could restart getty mid-typing"
+fi
+if grep -rq "restart.*getty@tty1" "$HERE/../stage2" 2>/dev/null; then
+    bad "something in the image build restarts getty@tty1"
+else
+    ok "nothing in the image build restarts getty@tty1"
+fi
 
 echo "=== long hostname and address (must truncate, not widen) ==="
 gen 'a-very-long-hostname-that-will-not-fit-in-the-box-at-all' '255.255.255.255'

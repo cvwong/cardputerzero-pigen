@@ -12,12 +12,10 @@ install -D -m 0644 files/10-cz-issue.conf \
   "${ROOTFS_DIR}/etc/systemd/system/getty@tty1.service.d/10-cz-issue.conf"
 # Regenerates /etc/issue as a bordered box before each login prompt. The static
 # files/issue.cz installed below is the fallback, visible only if this fails.
+# There is deliberately no NetworkManager hook to repaint the banner once DHCP
+# completes: getty starts ~17s before the lease arrives, and restarting it to
+# refresh the box clears the screen and discards a half-typed username.
 install -D -m 0755 files/cz-issue "${ROOTFS_DIR}/usr/local/sbin/cz-issue"
-# getty starts before DHCP completes, so the first banner of a boot has no
-# address; this repaints it once one arrives, but only if the console is idle.
-# NetworkManager ignores dispatcher scripts that are group/world writable.
-install -D -m 0755 files/99-cz-issue.dispatcher \
-  "${ROOTFS_DIR}/etc/NetworkManager/dispatcher.d/99-cz-issue"
 install -D -m 0644 files/cz-motd.sh "${ROOTFS_DIR}/etc/profile.d/cz-motd.sh"
 install -D -m 0644 files/issue.net "${ROOTFS_DIR}/etc/issue.net"
 install -D -m 0644 files/motd      "${ROOTFS_DIR}/etc/motd"
