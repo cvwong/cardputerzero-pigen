@@ -1,0 +1,5 @@
+# cz-console-switch — kernel-level VT switch for the dual-display setup.
+# Works even when a screen looks frozen (keymap layer, below userspace):
+#   Alt+P = panel  (tty1, menu)     Alt+M = monitor (tty2, CLI terminal)
+alt keycode 25 = Console_1
+alt keycode 50 = Console_2

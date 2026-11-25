@@ -47,6 +47,9 @@ if [ -n "$H" ]; then
     for t in 2 3 4 5 6; do map_vt "$t" "$H"; done
 else
     for t in 2 3 4 5 6; do map_vt "$t" "$P"; done
+    # Unplug: the live console may sit on the vanished HDMI fb (its index now
+    # points at the panel), leaving the menu stuck in background; bring it home.
+    if [ "$(fgconsole 2>/dev/null)" != 1 ]; then chvt 1 2>/dev/null || true; fi
 fi
 
 STATE=${CZ_DS_STATE:-/run/cz-display-switch.state}

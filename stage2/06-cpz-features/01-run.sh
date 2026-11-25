@@ -26,6 +26,7 @@ fi
 install -D -m 0644 files/tca8418_keypad_m5stack_keymap.map \
   "${ROOTFS_DIR}/usr/share/keymaps/tca8418_keypad_m5stack_keymap.map"
 install -D -m 0755 files/cz-keymap "${ROOTFS_DIR}/usr/local/sbin/cz-keymap"
+install -D -m 0644 files/cz-console-switch.map "${ROOTFS_DIR}/usr/share/keymaps/cz-console-switch.map"
 install -D -m 0644 files/cz-keymap.service "${ROOTFS_DIR}/etc/systemd/system/cz-keymap.service"
 on_chroot << 'CHROOT'
 systemctl enable cz-keymap.service

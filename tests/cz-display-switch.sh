@@ -27,6 +27,11 @@ cat > "$STUB/systemctl" <<'EOF'
 printf '%s\n' "$*" >> "$SYSLOG"
 EOF
 chmod +x "$STUB/systemctl"
+cat > "$STUB/chvt" <<'EOF'
+#!/bin/bash
+printf 'chvt %s\n' "$1" >> "$MAPLOG"
+EOF
+chmod +x "$STUB/chvt"
 export PATH="$STUB:$PATH"
 
 mk_sysfs() {   # $1 = root; creates panel fb0
@@ -61,6 +66,12 @@ run "$R"
 [ "$(restarts "$R")" = 0 ] \
     && ok "no getty restart without an HDMI fb" || bad "getty restarted without an HDMI fb"
 
+echo "=== unplug while the monitor was live: foreground returns to tty1 ==="
+: > "$R/maplog"
+MAPLOG="$R/maplog" SYSLOG="$R/syslog" FG_CURRENT=2 CZ_DS_ROOT="$R" \
+    CZ_DS_LOCK="$R/lock/l" CZ_DS_SETTLE=0 CZ_DS_STATE="$R/state2" bash "$SW"
+grep -q '^chvt 1$' "$R/maplog" && ok "chvt 1 restores the live console to the panel" || bad "foreground not restored: $(cat "$R/maplog" | tr '\n' ';')"
+
 echo "=== vc4 HDMI fb present (phantom or real): tty1 pinned, tty2-6 parked on it ==="
 R="$WORK/hdmi"; mk_sysfs "$R"; add_hdmi_fb "$R"
 run "$R"
@@ -71,6 +82,12 @@ run "$R"
 [ "$(restarts "$R")" = 1 ] \
     && ok "getty@tty2 restarted so its prompt redraws on the monitor" \
     || bad "getty@tty2 not restarted on HDMI fb appearance"
+
+echo "=== monitor live while HDMI fb present: foreground untouched ==="
+: > "$R/maplog"
+MAPLOG="$R/maplog" SYSLOG="$R/syslog3" FG_CURRENT=2 CZ_DS_ROOT="$R" \
+    CZ_DS_LOCK="$R/lock/l" CZ_DS_SETTLE=0 CZ_DS_STATE="$R/state3" bash "$SW"
+if grep -q '^chvt ' "$R/maplog"; then bad "chvt called with HDMI present: $(grep '^chvt' "$R/maplog" | tr '\n' ';')"; else ok "no chvt while the HDMI fb still exists"; fi
 
 echo "=== re-run after fbcon drift re-asserts the same mapping ==="
 MAPLOG="$R/maplog" SYSLOG="$R/syslog" CZ_DS_ROOT="$R" CZ_DS_LOCK="$R/lock/l" \

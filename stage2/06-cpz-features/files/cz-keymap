@@ -1,8 +1,10 @@
 #!/bin/bash
 # Overlay the vendor Sym-layer keymap on top of the base console keymap.
 MAP=/usr/share/keymaps/tca8418_keypad_m5stack_keymap.map
-[ -r "$MAP" ] || exit 0
+# Alt+P / Alt+M VT switch for the dual-display setup (works when frozen).
+SWITCH=/usr/share/keymaps/cz-console-switch.map
 for t in 1 2 3 4 5 6; do
-    loadkeys -q -C "/dev/tty$t" "$MAP" 2>/dev/null || true
+    [ -r "$MAP" ] && loadkeys -q -C "/dev/tty$t" "$MAP" 2>/dev/null || true
+    [ -r "$SWITCH" ] && loadkeys -q -C "/dev/tty$t" "$SWITCH" 2>/dev/null || true
 done
 exit 0
