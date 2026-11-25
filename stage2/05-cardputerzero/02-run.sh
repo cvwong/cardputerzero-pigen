@@ -21,6 +21,9 @@ for cmd in "${ROOTFS_DIR}/boot/firmware/cmdline.txt" "${ROOTFS_DIR}/boot/cmdline
             # The board HDMI HPD/EDID lines never assert, so the output must
             # be forced on with a fixed digital mode or the monitor stays dark.
             if (t ~ /^video=HDMI-A-1:/) continue
+            # Probe-defer noise (e.g. bcm2835 spi -517) is KERN_ERR; keep it in
+            # the journal but off every console, including the monitor fb.
+            if (t ~ /^loglevel=/) continue
             if (keep != "1" && t == "console=serial0,115200") continue
             out = out (out == "" ? "" : " ") t
         }
@@ -29,7 +32,7 @@ for cmd in "${ROOTFS_DIR}/boot/firmware/cmdline.txt" "${ROOTFS_DIR}/boot/cmdline
     mv "${cmd}.tmp" "$cmd"
 
     for tok in "console=tty1" "fbcon=map:0" "fbcon=font:${CONSOLE_FONT}" \
-               "consoleblank=0" "quiet" "loglevel=3" "logo.nologo" \
+               "consoleblank=0" "quiet" "loglevel=2" "logo.nologo" \
                "cfg80211.ieee80211_regdom=${REGDOMAIN}" "video=HDMI-A-1:1920x1080@60D"; do
         grep -qF -- "$tok" "$cmd" || sed -i "s|\$| ${tok}|" "$cmd"
     done
