@@ -18,7 +18,7 @@ for cmd in "${ROOTFS_DIR}/boot/firmware/cmdline.txt" "${ROOTFS_DIR}/boot/cmdline
             # ed5fcb5 shipped this token; cached rootfs cmdline.txt still carries
             # it and cz-display-switch supersedes it, so drop it on every build.
             if (t == "video=HDMI-A-1:d") continue
-            # The board's HDMI HPD/EDID lines never assert, so the output must
+            # The board HDMI HPD/EDID lines never assert, so the output must
             # be forced on with a fixed digital mode or the monitor stays dark.
             if (t ~ /^video=HDMI-A-1:/) continue
             if (keep != "1" && t == "console=serial0,115200") continue
