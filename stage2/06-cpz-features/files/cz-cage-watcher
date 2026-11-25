@@ -1,0 +1,18 @@
+#!/bin/bash
+# cz-cage-watcher — follow the foreground VT: Alt+M (chvt 2) starts the
+# monitor compositor, Alt+P / session exit (chvt 1) stops it. The compositor
+# grabs the keypad while running, so starting/stopping it IS the switch.
+set -u
+LOOPS=${CZ_WATCH_LOOPS:-0}
+while :; do
+    fg=$(fgconsole 2>/dev/null) || fg=1
+    if [ "$fg" = 2 ]; then
+        systemctl is-active --quiet cz-cage.service \
+            || systemctl start --no-block cz-cage.service 2>/dev/null
+    else
+        systemctl is-active --quiet cz-cage.service \
+            && systemctl stop --no-block cz-cage.service 2>/dev/null
+    fi
+    [ "$LOOPS" != 0 ] && { LOOPS=$((LOOPS-1)); [ "$LOOPS" = 0 ] && break; }
+    sleep "${CZ_WATCH_SLEEP:-1}"
+done

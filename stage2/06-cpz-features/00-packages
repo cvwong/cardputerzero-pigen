@@ -7,3 +7,7 @@ rpicam-apps-core
 rpicam-apps-encoder
 tmux
 v4l-utils
+cage
+foot
+seatd
+fonts-dejavu-core

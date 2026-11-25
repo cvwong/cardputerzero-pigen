@@ -1,0 +1,12 @@
+[Unit]
+Description=Start/stop the monitor compositor with the foreground VT
+After=cz-display-switch.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/cz-cage-watcher
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

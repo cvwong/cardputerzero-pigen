@@ -1,8 +1,0 @@
-[Unit]
-Description=Watch for monitor repaint requests from user sessions
-
-[Path]
-PathExists=/tmp/.cz-repaint
-
-[Install]
-WantedBy=multi-user.target

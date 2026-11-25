@@ -1,0 +1,15 @@
+[Unit]
+Description=Monitor terminal compositor (cage + foot on the HDMI card)
+After=seatd.service
+Requires=seatd.service
+
+[Service]
+Type=simple
+RuntimeDirectory=cz-cage
+Environment=XDG_RUNTIME_DIR=/run/cz-cage
+Environment=WLR_DRM_DEVICES=/dev/dri/card0
+ExecStart=/usr/bin/cage -- /usr/bin/foot -e /usr/local/bin/cz-monitor-session
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
