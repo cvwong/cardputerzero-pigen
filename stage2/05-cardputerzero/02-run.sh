@@ -24,7 +24,7 @@ for cmd in "${ROOTFS_DIR}/boot/firmware/cmdline.txt" "${ROOTFS_DIR}/boot/cmdline
 
     for tok in "console=tty1" "fbcon=map:0" "fbcon=font:${CONSOLE_FONT}" \
                "consoleblank=0" "quiet" "loglevel=3" "logo.nologo" \
-               "cfg80211.ieee80211_regdom=${REGDOMAIN}" "video=HDMI-A-1:d"; do
+               "cfg80211.ieee80211_regdom=${REGDOMAIN}"; do
         grep -qF -- "$tok" "$cmd" || sed -i "s|\$| ${tok}|" "$cmd"
     done
 done

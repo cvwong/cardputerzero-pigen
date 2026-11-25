@@ -1,0 +1,11 @@
+[Unit]
+Description=Pick console output (HDMI monitor if real, else LCD panel)
+After=lcd-console.service cz-splash.service
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cz-display-switch
+
+[Install]
+WantedBy=multi-user.target

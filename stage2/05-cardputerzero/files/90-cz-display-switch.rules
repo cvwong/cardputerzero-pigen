@@ -1,0 +1,4 @@
+# Re-evaluate the console output when the HDMI connector hotplugs or a new
+# framebuffer (including a phantom vc4 one) appears.
+SUBSYSTEM=="drm", ACTION=="change", RUN+="/usr/local/sbin/cz-display-switch"
+SUBSYSTEM=="graphics", ACTION=="add", RUN+="/usr/local/sbin/cz-display-switch"

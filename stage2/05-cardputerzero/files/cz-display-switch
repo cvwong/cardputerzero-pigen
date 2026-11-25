@@ -1,0 +1,77 @@
+#!/bin/bash
+# cz-display-switch — exclusive console output, cpzos-style but fbcon-native:
+# the console follows a real HDMI monitor (connector connected AND EDID read),
+# otherwise it stays on the 320x170 panel and the panel backlight is restored.
+# A phantom HPD glitch registers a vc4 fb with no EDID, so it never wins here;
+# fbcon may hand the console to that fb in-kernel, and we take it back.
+set -u
+R=${CZ_DS_ROOT:-}
+LOCK=${CZ_DS_LOCK:-/run/lock/cz-display-switch.lock}
+mkdir -p "$(dirname "$LOCK")" 2>/dev/null
+exec 9>"$LOCK" 2>/dev/null || exit 0
+flock -n 9 || exit 0
+
+log() { logger -t cz-display "$1" 2>/dev/null || echo "cz-display: $1"; }
+
+panel_fb() {
+    local d
+    for d in "$R"/sys/class/graphics/fb[0-9]*; do
+        [ -r "$d/virtual_size" ] || continue
+        case "$(cat "$d/virtual_size")" in
+            320,170|170,320) echo "${d##*/fb}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+hdmi_fb() {
+    local d
+    for d in "$R"/sys/class/graphics/fb[0-9]*; do
+        [ "$(cat "$d/name" 2>/dev/null)" = vc4drmfb ] && { echo "${d##*/fb}"; return 0; }
+    done
+    return 1
+}
+
+hdmi_conn() {
+    local d
+    for d in "$R"/sys/class/drm/card[0-9]*-HDMI-A-1; do
+        [ -r "$d/status" ] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+set_backlight() {
+    local b m
+    for b in "$R"/sys/class/backlight/*; do
+        [ -w "$b/brightness" ] || continue
+        if [ "$1" = off ]; then
+            echo 0 > "$b/brightness"
+        else
+            m=$(cat "$b/max_brightness" 2>/dev/null) || continue
+            echo "$m" > "$b/brightness"
+        fi
+    done
+}
+
+map_vt() { con2fbmap "$1" "$2" 2>/dev/null || true; }
+
+P=$(panel_fb) || P=""
+H=$(hdmi_fb)  || H=""
+C=$(hdmi_conn) || C=""
+
+if [ -n "$C" ] && [ "$(cat "$C/status" 2>/dev/null)" = connected ] \
+   && [ -s "$C/edid" ] && [ -n "$H" ]; then
+    for t in 1 2 3 4 5 6; do map_vt "$t" "$H"; done
+    set_backlight off
+    log "real monitor: console on fb$H, panel backlight off"
+else
+    if [ -z "$P" ]; then log "no panel framebuffer; nothing to do"; exit 0; fi
+    map_vt 1 "$P"
+    for t in 2 3 4 5 6; do map_vt "$t" "${H:-$P}"; done
+    set_backlight on
+    if [ -n "$H" ]; then
+        log "no real monitor: console on panel fb$P, fb$H left for tty2-6"
+    else
+        log "console on panel fb$P"
+    fi
+fi
