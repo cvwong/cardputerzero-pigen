@@ -1,0 +1,10 @@
+#!/bin/bash
+# cz-output — choose which screen is the live console. fbcon renders only the
+# foreground VT: panel = tty1 (menu), monitor = tty2 (CLI terminal).
+set -u
+case "${1:-}" in
+  panel)   chvt 1 ;;
+  monitor) chvt 2 ;;
+  "")      fgconsole 2>/dev/null | sed -e "s/^1$/panel/" -e "s/^2$/monitor/" || echo unknown ;;
+  *)       echo "usage: cz-output [panel|monitor]" >&2; exit 2 ;;
+esac

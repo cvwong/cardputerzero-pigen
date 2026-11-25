@@ -147,8 +147,10 @@ m_system() {
 
 m_display() {
     menu DISPLAY system \
-      "Backlight +"   '!blstep +' \
-      "Backlight -"   '!blstep -'
+      "Backlight +"     '!blstep +' \
+      "Backlight -"     '!blstep -' \
+      "Output: monitor" '!cz-output monitor' \
+      "Output: panel"   '!cz-output panel'
 }
 
 m_power() {

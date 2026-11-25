@@ -44,6 +44,7 @@ install -D -m 0755 files/cz-record "${ROOTFS_DIR}/usr/local/bin/cz-record"
 install -D -m 0755 files/cz-files "${ROOTFS_DIR}/usr/local/bin/cz-files"
 install -D -m 0755 files/cz-files-web.py "${ROOTFS_DIR}/usr/local/lib/cz-files-web.py"
 install -D -m 0755 files/cz-font "${ROOTFS_DIR}/usr/local/bin/cz-font"
+install -D -m 0755 files/cz-output "${ROOTFS_DIR}/usr/local/bin/cz-output"
 HN=$(cat "${ROOTFS_DIR}/etc/hostname")
 sed -i '/^127\.0\.1\.1[[:space:]]/d' "${ROOTFS_DIR}/etc/hosts"
 printf '127.0.1.1\t%s\n' "$HN" >> "${ROOTFS_DIR}/etc/hosts"
