@@ -15,6 +15,9 @@ for cmd in "${ROOTFS_DIR}/boot/firmware/cmdline.txt" "${ROOTFS_DIR}/boot/cmdline
             if (t == "splash" || t == "quiet" || t == "plymouth.ignore-serial-consoles") continue
             if (t ~ /^fbcon=/ || t ~ /^consoleblank=/ || t ~ /^logo\.nologo$/) continue
             if (t ~ /^cfg80211\.ieee80211_regdom=/) continue
+            # ed5fcb5 shipped this token; cached rootfs cmdline.txt still carries
+            # it and cz-display-switch supersedes it, so drop it on every build.
+            if (t == "video=HDMI-A-1:d") continue
             if (keep != "1" && t == "console=serial0,115200") continue
             out = out (out == "" ? "" : " ") t
         }
