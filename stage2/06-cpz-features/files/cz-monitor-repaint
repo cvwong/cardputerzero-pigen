@@ -1,0 +1,11 @@
+#!/bin/bash
+# cz-monitor-repaint — root helper triggered by /tmp/.cz-repaint (path unit):
+# "waiting" repaints the idle view, anything else just flickers the current
+# tty2 frame (e.g. a fresh shell prompt) onto the monitor fb.
+set -u
+case "$(cat /tmp/.cz-repaint 2>/dev/null)" in
+    waiting) /usr/local/sbin/cz-monitor-view ;;
+esac
+rm -f /tmp/.cz-repaint
+chvt 2; chvt 1
+exit 0

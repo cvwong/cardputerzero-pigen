@@ -46,6 +46,13 @@ install -D -m 0755 files/cz-files "${ROOTFS_DIR}/usr/local/bin/cz-files"
 install -D -m 0755 files/cz-files-web.py "${ROOTFS_DIR}/usr/local/lib/cz-files-web.py"
 install -D -m 0755 files/cz-font "${ROOTFS_DIR}/usr/local/bin/cz-font"
 install -D -m 0755 files/cz-output "${ROOTFS_DIR}/usr/local/bin/cz-output"
+install -D -m 0755 files/cz-monitor-shell "${ROOTFS_DIR}/usr/local/bin/cz-monitor-shell"
+install -D -m 0755 files/cz-monitor-view "${ROOTFS_DIR}/usr/local/sbin/cz-monitor-view"
+install -D -m 0755 files/cz-monitor-repaint "${ROOTFS_DIR}/usr/local/sbin/cz-monitor-repaint"
+install -D -m 0644 files/cz-monitor-view.service "${ROOTFS_DIR}/etc/systemd/system/cz-monitor-view.service"
+install -D -m 0644 files/cz-monitor-tty2.service "${ROOTFS_DIR}/etc/systemd/system/cz-monitor-tty2.service"
+install -D -m 0644 files/cz-monitor-repaint.service "${ROOTFS_DIR}/etc/systemd/system/cz-monitor-repaint.service"
+install -D -m 0644 files/cz-monitor-repaint.path "${ROOTFS_DIR}/etc/systemd/system/cz-monitor-repaint.path"
 HN=$(cat "${ROOTFS_DIR}/etc/hostname")
 sed -i '/^127\.0\.1\.1[[:space:]]/d' "${ROOTFS_DIR}/etc/hosts"
 printf '127.0.1.1\t%s\n' "$HN" >> "${ROOTFS_DIR}/etc/hosts"
@@ -69,4 +76,5 @@ install -D -m 0644 files/cz-firstboot.service "${ROOTFS_DIR}/etc/systemd/system/
 on_chroot << 'CHROOT'
 systemctl enable cz-splash.service
 systemctl enable cz-firstboot.service
+systemctl enable cz-monitor-view.service cz-monitor-tty2.service cz-monitor-repaint.path
 CHROOT

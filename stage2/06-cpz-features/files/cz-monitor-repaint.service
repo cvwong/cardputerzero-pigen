@@ -1,0 +1,6 @@
+[Unit]
+Description=Repaint the monitor fb when a user session asks for it
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cz-monitor-repaint

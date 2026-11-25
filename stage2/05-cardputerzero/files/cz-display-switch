@@ -59,14 +59,10 @@ printf '%s\n' "$cur" > "$STATE" 2>/dev/null || true
 if [ -n "$H" ]; then
     log "tty1 pinned to panel fb$P; tty2-6 on HDMI fb$H (monitor terminal)"
     # Boot console text rendered into the HDMI fb before the pin leaves a
-    # stale garbled frame; black it out until the monitor goes foreground.
+    # stale garbled frame; cz-monitor-view paints its idle view over it.
     if [ -z "$R" ] && [ -w "/dev/fb$H" ]; then
         cat /dev/zero > "/dev/fb$H" 2>/dev/null || true
     fi
-    # agetty drew tty2's prompt while it was mapped elsewhere; fbcon does not
-    # repaint old tty contents into a newly mapped fb, so redraw it fresh.
-    "${CZ_DS_SYSTEMCTL:-systemctl}" restart getty@tty2.service --no-block \
-        >/dev/null 2>&1 || true
 else
     log "tty1-6 on panel fb$P (no HDMI framebuffer)"
 fi

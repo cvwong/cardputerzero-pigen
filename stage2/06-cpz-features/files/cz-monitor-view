@@ -1,0 +1,25 @@
+#!/bin/bash
+# cz-monitor-view — paint the monitor's idle view: a big centred "Waiting" on
+# tty2, frozen onto the HDMI fb by a repaint flicker (fbcon renders only the
+# foreground VT, so chvt there and back leaves the frame on the monitor).
+set -u
+TTY2=${CZ_MON_TTY2:-/dev/tty2}
+R=${CZ_MON_ROOT:-}
+H=""
+for d in "$R"/sys/class/graphics/fb[0-9]*; do
+    [ "$(cat "$d/name" 2>/dev/null)" = vc4drmfb ] && { H=1; break; }
+done
+[ -n "$H" ] || exit 0
+
+FONT=${CZ_MON_FONT:-/usr/share/consolefonts/Lat15-Terminus32x16.psf.gz}
+[ -r "$FONT" ] && "${CZ_MON_SETFONT:-setfont}" -C "$TTY2" "$FONT" 2>/dev/null || true
+
+ROWS=67; COLS=60
+if sz=$("${CZ_MON_STTY:-stty}" -F "$TTY2" size 2>/dev/null); then
+    ROWS=${sz% *}; COLS=${sz#* }
+fi
+row=$(( ROWS / 2 )); col=$(( (COLS - 7) / 2 + 1 ))
+printf '\e[2J\e[H' > "$TTY2"
+printf '\e[%s;%sHWaiting' "$row" "$col" > "$TTY2"
+"${CZ_MON_CHVT:-chvt}" 2; "${CZ_MON_CHVT:-chvt}" 1
+exit 0

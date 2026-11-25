@@ -15,5 +15,7 @@ on_chroot << 'CHROOT'
 systemctl disable fb_load.service
 CHROOT
 on_chroot << 'CHROOT'
-systemctl enable lcd-console.service cz-display-switch.service getty@tty2.service
+systemctl enable lcd-console.service cz-display-switch.service
+# tty2 belongs to the monitor view (cz-monitor-*), not a getty login.
+systemctl disable getty@tty2.service || true
 CHROOT
