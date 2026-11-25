@@ -1,9 +1,10 @@
 #!/bin/bash
-# cz-display-switch — exclusive console output, cpzos-style but fbcon-native:
-# the console follows a real HDMI monitor (connector connected AND EDID read),
-# otherwise it stays on the 320x170 panel and the panel backlight is restored.
-# A phantom HPD glitch registers a vc4 fb with no EDID, so it never wins here;
-# fbcon may hand the console to that fb in-kernel, and we take it back.
+# cz-display-switch — keep the console where it belongs.
+# fbcon hands every VT to a newly registered vc4 HDMI fb (phantom HPD glitch
+# or a real monitor), which blanks the 320x170 panel; re-pin tty1 to the panel
+# on every hotplug event, and park tty2-6 on the HDMI fb when one exists so an
+# external monitor gets its own getty terminal (getty@tty2, plain CLI because
+# cz-autostart only launches the menu on tty1).
 set -u
 R=${CZ_DS_ROOT:-}
 LOCK=${CZ_DS_LOCK:-/run/lock/cz-display-switch.lock}
@@ -32,46 +33,28 @@ hdmi_fb() {
     return 1
 }
 
-hdmi_conn() {
-    local d
-    for d in "$R"/sys/class/drm/card[0-9]*-HDMI-A-1; do
-        [ -r "$d/status" ] && { echo "$d"; return 0; }
-    done
-    return 1
-}
-
-set_backlight() {
-    local b m
-    for b in "$R"/sys/class/backlight/*; do
-        [ -w "$b/brightness" ] || continue
-        if [ "$1" = off ]; then
-            echo 0 > "$b/brightness"
-        else
-            m=$(cat "$b/max_brightness" 2>/dev/null) || continue
-            echo "$m" > "$b/brightness"
-        fi
-    done
-}
-
 map_vt() { con2fbmap "$1" "$2" 2>/dev/null || true; }
+
+# Let a hotplug modeset finish before reading the framebuffer list.
+sleep "${CZ_DS_SETTLE:-1}"
 
 P=$(panel_fb) || P=""
 H=$(hdmi_fb)  || H=""
-C=$(hdmi_conn) || C=""
+if [ -z "$P" ]; then log "no panel framebuffer; nothing to do"; exit 0; fi
 
-if [ -n "$C" ] && [ "$(cat "$C/status" 2>/dev/null)" = connected ] \
-   && [ -s "$C/edid" ] && [ -n "$H" ]; then
-    for t in 1 2 3 4 5 6; do map_vt "$t" "$H"; done
-    set_backlight off
-    log "real monitor: console on fb$H, panel backlight off"
+map_vt 1 "$P"
+if [ -n "$H" ]; then
+    for t in 2 3 4 5 6; do map_vt "$t" "$H"; done
 else
-    if [ -z "$P" ]; then log "no panel framebuffer; nothing to do"; exit 0; fi
-    map_vt 1 "$P"
-    for t in 2 3 4 5 6; do map_vt "$t" "${H:-$P}"; done
-    set_backlight on
-    if [ -n "$H" ]; then
-        log "no real monitor: console on panel fb$P, fb$H left for tty2-6"
-    else
-        log "console on panel fb$P"
-    fi
+    for t in 2 3 4 5 6; do map_vt "$t" "$P"; done
+fi
+
+STATE=${CZ_DS_STATE:-/run/cz-display-switch.state}
+cur="$P ${H:-none}"
+if [ -r "$STATE" ] && [ "$(cat "$STATE" 2>/dev/null)" = "$cur" ]; then exit 0; fi
+printf '%s\n' "$cur" > "$STATE" 2>/dev/null || true
+if [ -n "$H" ]; then
+    log "tty1 pinned to panel fb$P; tty2-6 on HDMI fb$H (monitor terminal)"
+else
+    log "tty1-6 on panel fb$P (no HDMI framebuffer)"
 fi

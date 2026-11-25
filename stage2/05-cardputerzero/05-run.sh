@@ -15,5 +15,5 @@ on_chroot << 'CHROOT'
 systemctl disable fb_load.service
 CHROOT
 on_chroot << 'CHROOT'
-systemctl enable lcd-console.service cz-display-switch.service
+systemctl enable lcd-console.service cz-display-switch.service getty@tty2.service
 CHROOT
