@@ -2,7 +2,12 @@
 Description=Expand root partition and filesystem on first boot
 Before=first-boot-complete.target
 After=systemd-remount-fs.service
-ConditionFirstBoot=yes
+# A success marker, not ConditionFirstBoot: the first attempt on 2026-11-26
+# failed (parted prompted for the in-use partition and got no tty), and with
+# ConditionFirstBoot the machine-id was already initialised by the next boot, so
+# the condition stayed unmet and the resize could never be retried. Keying on a
+# marker the script writes only on success lets it retry until it works.
+ConditionPathExists=!/etc/cardputerzero/resize.done
 DefaultDependencies=no
 Conflicts=shutdown.target
 Before=shutdown.target
@@ -10,7 +15,6 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/cardputerzero/resize-root
-ExecStartPost=/usr/bin/systemctl disable %n
 RemainAfterExit=yes
 
 [Install]

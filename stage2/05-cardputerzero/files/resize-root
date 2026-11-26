@@ -1,15 +1,21 @@
 #!/bin/bash
 # Grow the root partition to the end of the disk, then the filesystem to match.
 #
-# This runs from userspace (cardputerzero-resize.service) rather than from the
+# Runs from userspace (cardputerzero-resize.service) rather than from the
 # initramfs: the stock ` resize` cmdline token drives resize_early and
 # set_partuuid before switch_root, and on this board that path never returned,
 # so 02-run.sh drops the token at build time.
+#
+# growpart, not parted. Root is already mounted by the time this runs, and
+# parted then asks "Partition /dev/mmcblk0p2 is being used. Are you sure you
+# want to continue?" - with no tty under systemd it exits 1, which is exactly
+# how the first version of this script failed on the 2026-11-26 22:03 boot.
 set -eu
 
 # Overridable for the same reason cz-splash overrides SYSFS: the geometry below
 # cannot otherwise be exercised on a machine whose root is not partition 2.
 SYS=${CZ_RESIZE_SYS:-/sys}
+DONE=${CZ_RESIZE_DONE:-/etc/cardputerzero/resize.done}
 
 ROOT_DEV=$(findmnt -n -o SOURCE /)
 ROOT_PART_NAME=$(lsblk -no KNAME "$ROOT_DEV")
@@ -30,25 +36,26 @@ if [ "$TARGET_END" -gt 4294967295 ]; then
 fi
 
 # A card that already booted once has the partition at the end of the disk with
-# only the filesystem left to grow; re-running parted there is pointless.
+# only the filesystem left to grow; re-growing the partition is pointless.
 PART_START=$(cat "$SYS_PART/start")
 WANT_SIZE=$((TARGET_END - PART_START + 1))
 HAVE_SIZE=$(cat "$SYS_PART/size")
 
 if [ "$HAVE_SIZE" -ge "$WANT_SIZE" ]; then
-    echo "cardputerzero-resize: partition already ends at sector $((PART_START + HAVE_SIZE - 1)), skipping parted"
+    echo "cardputerzero-resize: partition already ends at sector $((PART_START + HAVE_SIZE - 1)), skipping growpart"
 else
-    echo "cardputerzero-resize: expanding partition $ROOT_PART_NUM on $ROOT_DISK to sector $TARGET_END"
-    parted -m "$ROOT_DISK" u s resizepart "$ROOT_PART_NUM" "$TARGET_END"
+    echo "cardputerzero-resize: growing partition $ROOT_PART_NUM on $ROOT_DISK to sector $TARGET_END"
+    growpart "$ROOT_DISK" "$ROOT_PART_NUM" || echo "cardputerzero-resize: growpart exited $?" >&2
 
-    # partprobe cannot re-read a disk whose partition is mounted and fails with
-    # EBUSY; partx --update issues BLKPG_RESIZE_PARTITION, which the kernel
-    # accepts for the live root.
+    # Rewriting the table is not enough - the kernel keeps the old size until it
+    # is told. partprobe fails EBUSY on a mounted partition; partx --update
+    # issues BLKPG_RESIZE_PARTITION, which the kernel accepts for the live root.
     partx --update "$ROOT_DISK" 2>/dev/null || partprobe "$ROOT_DISK" 2>/dev/null || true
 fi
 
 # Fail loudly instead of reporting success with the filesystem still small: the
-# kernel has to agree on the new size before resize2fs can grow into it.
+# kernel has to agree on the new size before resize2fs can grow into it. Leaving
+# the marker unwritten is what lets the service retry on the next boot.
 HAVE_SIZE=$(cat "$SYS_PART/size")
 if [ "$HAVE_SIZE" -lt "$WANT_SIZE" ]; then
     echo "cardputerzero-resize: kernel still reports $HAVE_SIZE sectors for $ROOT_PART_NAME, expected $WANT_SIZE - filesystem not grown" >&2
@@ -58,4 +65,6 @@ fi
 echo "cardputerzero-resize: expanding filesystem on $ROOT_DEV"
 resize2fs "$ROOT_DEV"
 
-echo "cardputerzero-resize: done"
+mkdir -p "$(dirname "$DONE")"
+: > "$DONE"
+echo "cardputerzero-resize: done, marker $DONE written"

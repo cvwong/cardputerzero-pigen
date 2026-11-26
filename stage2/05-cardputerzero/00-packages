@@ -5,3 +5,7 @@ alsa-utils
 vim-tiny
 i2c-tools
 evtest
+# growpart: resize-root needs a partition grower that will not prompt, since
+# parted asks about the in-use partition and gets no tty under systemd. It was
+# only present transitively before, so a build could have dropped it silently.
+cloud-guest-utils
