@@ -8,7 +8,12 @@ Type=simple
 RuntimeDirectory=cz-cage
 Environment=XDG_RUNTIME_DIR=/run/cz-cage
 Environment=WLR_DRM_DEVICES=/dev/dri/card0
-ExecStart=/usr/bin/cage -- /usr/bin/foot -e /usr/local/bin/cz-monitor-session
+# --config is required: foot searches $XDG_CONFIG_HOME/foot/foot.ini and
+# $XDG_CONFIG_DIRS/foot/foot.ini (/etc/xdg/foot/foot.ini, owned by the foot
+# package). It never reads the /etc/foot/foot.ini that 01-run.sh installs, so
+# without this the Alt+P binding is inert and, with cage holding the input seat,
+# there is no key left that returns the console to the panel.
+ExecStart=/usr/bin/cage -- /usr/bin/foot --config=/etc/foot/foot.ini -e /usr/local/bin/cz-monitor-session
 Restart=no
 
 [Install]
