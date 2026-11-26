@@ -210,13 +210,30 @@ req -o /dev/null --data-urlencode "name=2026" "$BASE/mkdir?path=Photos"
 [ -d "$ROOT/Photos/2026" ] && ok "folder created inside a subdirectory" || bad "nested folder missing"
 
 echo "=== folder names are validated ==="
+# Two things the previous version of this loop got wrong, which let a mutation
+# that deleted the validation pass unnoticed:
+#   - it only checked that nothing escaped the root, but Store.resolve() already
+#     guarantees that on its own, so it proved nothing about this guard;
+#   - it grepped the 303 response body for the error, but a redirect body is
+#     empty -- the reason lives in the Location header's err= parameter.
+# So assert both that the root gained nothing at all, and that the rejection
+# reason is the validation's own message rather than a later fallback.
 long=$(printf 'x%.0s' $(seq 1 80))
 for bad_name in '../escape' '..' '.' '' 'a/b' 'a\b' "$long"; do
-    c=$(req -o "$WORK/body" -w '%{http_code}' --data-urlencode "name=$bad_name" "$BASE/mkdir?path=")
     label="${bad_name:-<empty>}"
+    before=$(find "$ROOT" -mindepth 1 | sort)
+    hdr=$(req -D - -o /dev/null --data-urlencode "name=$bad_name" "$BASE/mkdir?path=")
+    after=$(find "$ROOT" -mindepth 1 | sort)
     [ -e "$WORK/escape" ] && bad "MKDIR ESCAPED the root with name [$label]"
-    [ "$c" = 303 ] && grep -q "invalid folder name" "$WORK/body" 2>/dev/null
-    if [ ! -e "$WORK/escape" ]; then ok "rejected folder name [$label]"; fi
+    if [ "$before" = "$after" ]; then
+        ok "[$label] created nothing in the root"
+    else
+        bad "[$label] was accepted; root gained: $(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')"
+    fi
+    case "$hdr" in
+      *invalid%20folder%20name*) ok "[$label] rejected by the name validation" ;;
+      *) bad "[$label] not rejected as invalid: $(printf '%s' "$hdr" | grep -i '^location:' || echo 'no Location header, got an error page')" ;;
+    esac
 done
 before_sub=$(stat -c %Y "$ROOT/sub")
 c=$(req -o "$WORK/body" -w '%{http_code}' --data-urlencode "name=sub" "$BASE/mkdir?path=")
