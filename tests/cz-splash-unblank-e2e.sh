@@ -97,5 +97,53 @@ wait "$pid" 2>/dev/null
 case "$(calls)" in *FBIOBLANK*) ok "SIGTERM also unblanks (no dark panel on a killed splash)" ;;
     *) bad "SIGTERM left the panel blanked" ;; esac
 
+echo "=== panel framebuffer detection (regression: hardcoded /dev/fb0) ==="
+# Reproduces the 2026-11-26 failure: cmdline forces HDMI on, so HDMI takes fb0
+# and the 320x170 panel becomes fb1. cz-splash used to blit to fb0 and unblank
+# fb0, leaving the panel at blank=4 with the login banner drawn into a dark
+# screen -- the device looked dead and was powered off.
+SYS="$WORK/sys"
+mkfb() { mkdir -p "$SYS/$1"; printf '%s' "$2" > "$SYS/$1/virtual_size"; printf '%s' "$3" > "$SYS/$1/blank"; }
+printf '#!/bin/sh\nexit 0\n' > "$MOCK/systemctl"
+export CZ_SPLASH_SYSFS="$SYS" CZ_SPLASH_MAX=0 CZ_SPLASH_MIN=0
+
+rm -rf "$SYS"; mkfb fb0 '1920,1080' 0; mkfb fb1 '320,170' 4
+: > "$CZ_TEST_CALLS"
+out=$(env -u CZ_SPLASH_FB bash "$CZ" 2>&1)
+printf '%s\n' "$out" | grep 'panel=' | sed 's/^/  /'
+case "$out" in *"panel=/dev/fb1"*) ok "picks fb1 when HDMI holds fb0 and the panel is fb1" ;;
+    *) bad "did not select the panel fb: $out" ;; esac
+case "$out" in *"panel=/dev/fb1 blank before unblank=4"*) ok "read the PANEL blank state (4), not the monitor's" ;;
+    *) bad "read the wrong blank attribute: $out" ;; esac
+case "$(calls)" in *"FBIOBLANK /dev/fb1"*) ok "issued FBIOBLANK against the panel" ;;
+    *) bad "FBIOBLANK went to the wrong device: $(calls | grep FBIOBLANK)" ;; esac
+
+echo "=== panel on fb0 (no HDMI) still resolves to fb0 ==="
+rm -rf "$SYS"; mkfb fb0 '320,170' 4
+: > "$CZ_TEST_CALLS"
+out=$(env -u CZ_SPLASH_FB bash "$CZ" 2>&1)
+case "$out" in *"panel=/dev/fb0"*) ok "picks fb0 when the panel is fb0" ;;
+    *) bad "wrong fb when the panel is fb0: $out" ;; esac
+
+echo "=== reversed enumeration order does not matter ==="
+rm -rf "$SYS"; mkfb fb0 '1920,1080' 0; mkfb fb1 '1920,1080' 0; mkfb fb2 '170,320' 4
+: > "$CZ_TEST_CALLS"
+out=$(env -u CZ_SPLASH_FB bash "$CZ" 2>&1)
+case "$out" in *"panel=/dev/fb2"*) ok "finds a rotated 170,320 panel on fb2" ;;
+    *) bad "did not find the panel on fb2: $out" ;; esac
+
+echo "=== no panel at all falls back to fb0 ==="
+rm -rf "$SYS"; mkfb fb0 '1920,1080' 0
+printf '#!/bin/sh\nexit 1\n' > "$MOCK/con2fbmap"; chmod +x "$MOCK/con2fbmap"
+: > "$CZ_TEST_CALLS"
+out=$(env -u CZ_SPLASH_FB bash "$CZ" 2>&1)
+case "$out" in *"panel=/dev/fb0"*) ok "falls back to fb0 when nothing matches" ;;
+    *) bad "no fallback when no panel matched: $out" ;; esac
+
+echo "=== an explicit CZ_SPLASH_FB still overrides detection ==="
+out=$(CZ_SPLASH_FB="$WORK/fb0" bash "$CZ" 2>&1)
+case "$out" in *"panel=$WORK/fb0"*) ok "CZ_SPLASH_FB override is honoured" ;;
+    *) bad "override ignored: $out" ;; esac
+
 echo
 if [ "$fail" = 0 ]; then echo "CZ-SPLASH-UNBLANK OK"; else echo "CZ-SPLASH-UNBLANK PROBLEM"; exit 1; fi

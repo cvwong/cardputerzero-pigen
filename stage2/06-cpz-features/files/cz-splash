@@ -1,6 +1,33 @@
 #!/bin/bash
 # cz-splash — image splash on the CardputerZero LCD before login.
-FB=${CZ_SPLASH_FB:-/dev/fb0}
+
+# SYSFS is overridable for the same reason the other knobs are: the detection
+# below cannot otherwise be exercised on a machine with no panel.
+SYSFS=${CZ_SPLASH_SYSFS:-/sys/class/graphics}
+
+# Resolve the framebuffer the LCD panel is actually on. lcd-console maps tty1 to
+# the 320x170 panel, but which /dev/fbN that is depends on whether an HDMI output
+# came up first: cmdline forces video=HDMI-A-1:1920x1080@60D, so with a monitor
+# attached HDMI takes fb0 and the panel becomes fb1 (journal 2026-11-26:
+# "lcd-console: tty1->fb1 (LCD), tty2-6->fb0 (HDMI)"). A hardcoded /dev/fb0 then
+# blits the splash to the monitor and unblanks the monitor, leaving the panel
+# powered down and the login screen dark. Detect it the way lcd-console does.
+panel_fb() {
+  local d n
+  for d in "$SYSFS"/fb[0-9]*; do
+    [ -r "$d/virtual_size" ] || continue
+    case "$(cat "$d/virtual_size" 2>/dev/null)" in
+      320,170|170,320) echo "/dev/${d##*/}"; return 0 ;;
+    esac
+  done
+  # No panel matched: fall back to wherever tty1 is mapped (last number in
+  # con2fbmap's output), then to fb0.
+  n=$(con2fbmap 1 2>/dev/null | grep -oE '[0-9]+' | tail -1)
+  if [ -n "$n" ] && [ -w "/dev/fb$n" ]; then echo "/dev/fb$n"; return 0; fi
+  echo /dev/fb0
+}
+
+FB=${CZ_SPLASH_FB:-$(panel_fb)}
 IMG=${CZ_SPLASH_IMG:-/usr/share/cz/cz-splash.rgb565}
 PING=${CZ_SPLASH_PING:-/usr/share/cz/cz-ping.wav}
 CZ_FONT=${CZ_FONT:-/usr/share/consolefonts/Lat15-Terminus12x6.psf.gz}
@@ -15,11 +42,12 @@ os.close(fd)' "$1"
 }
 
 # Switching the VT to KD_GRAPHICS detaches fbcon, and the panel-mipi-dbid DRM
-# driver then powers the panel down -- /sys/class/graphics/fb0/blank reads 4
-# (FB_BLANK_POWERDOWN) even though consoleblank=0 and lcd-console already ran
-# `setterm --blank 0 --powerdown 0`. Restoring KD_TEXT does not power it back
-# on, so the login banner agetty draws next goes into a dark panel and the
-# device looks dead. Unblank explicitly via FBIOBLANK on the way out.
+# driver then powers the panel down -- the panel's /sys/class/graphics/fbN/blank
+# reads 4 (FB_BLANK_POWERDOWN) even though consoleblank=0 and lcd-console already
+# ran `setterm --blank 0 --powerdown 0`. Restoring KD_TEXT does not power it back
+# on, so the login banner agetty draws next goes into a dark panel and the device
+# looks dead. Unblank explicitly via FBIOBLANK on the way out -- against $FB, the
+# panel, which is not necessarily fb0.
 unblank() {
   python3 -c 'import os,fcntl,sys
 try:
@@ -30,14 +58,14 @@ except Exception:
     pass' "$FB" 2>/dev/null
 }
 
-# Log the panel state either side of the unblank so the journal settles whether
-# the graphics blit is really what powers the panel down, instead of leaving it
-# a theory.
+# Log the panel device and its blank state either side of the unblank, so the
+# journal shows which framebuffer was chosen and whether the graphics blit really
+# is what powers it down, instead of leaving either a theory.
 restore_console() {
-  local b="/sys/class/graphics/${FB##*/}/blank"
+  local b="$SYSFS/${FB##*/}/blank"
   vtmode t
   setfont -C /dev/tty1 "$CZ_FONT" 2>/dev/null
-  echo "cz-splash: blank before unblank=$(cat "$b" 2>/dev/null)"
+  echo "cz-splash: panel=$FB blank before unblank=$(cat "$b" 2>/dev/null)"
   unblank
   echo "cz-splash: blank after unblank=$(cat "$b" 2>/dev/null)"
 }
