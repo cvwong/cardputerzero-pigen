@@ -1,21 +1,34 @@
 #!/bin/bash
-# Grow the root partition to the end of the disk, then the filesystem to match.
+# Grow the root partition to fill the disk, then the filesystem to match.
 #
 # Runs from userspace (cardputerzero-resize.service) rather than from the
 # initramfs: the stock ` resize` cmdline token drives resize_early and
 # set_partuuid before switch_root, and on this board that path never returned,
 # so 02-run.sh drops the token at build time.
 #
-# growpart, not parted. Root is already mounted by the time this runs, and
-# parted then asks "Partition /dev/mmcblk0p2 is being used. Are you sure you
-# want to continue?" - with no tty under systemd it exits 1, which is exactly
-# how the first version of this script failed on the 2026-11-26 22:03 boot.
+# growpart, not parted. Root is already mounted here, and parted then asks
+# "Partition /dev/mmcblk0p2 is being used. Are you sure you want to continue?"
+# and, having no tty under systemd, exits 1. That is how the first version of
+# this script failed on the 2026-11-26 22:03 boot.
+#
+# growpart needs sfdisk or sgdisk, which live in /usr/sbin - a PATH that a login
+# shell does not have, so set it rather than rely on the caller. Overridable for
+# the same reason the knobs below are: a hardcoded PATH also discards the mocks
+# the tests put in front of it.
+PATH=${CZ_RESIZE_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
 set -eu
 
 # Overridable for the same reason cz-splash overrides SYSFS: the geometry below
 # cannot otherwise be exercised on a machine whose root is not partition 2.
 SYS=${CZ_RESIZE_SYS:-/sys}
 DONE=${CZ_RESIZE_DONE:-/etc/cardputerzero/resize.done}
+# Usable slack to tolerate at the end of the disk. Raspberry Pi Imager expands
+# the last partition itself but stops 33 sectors short of the end, so demanding
+# the final sector exactly - as the first version did - made growpart answer
+# "NOCHANGE: ... it cannot be grown" and the script then failed a resize that
+# only needed resize2fs. 8192 sectors (4 MiB) is far above any real tool's
+# rounding and far below a partition that genuinely never grew.
+MAX_SLACK=${CZ_RESIZE_MAX_SLACK:-8192}
 
 ROOT_DEV=$(findmnt -n -o SOURCE /)
 ROOT_PART_NAME=$(lsblk -no KNAME "$ROOT_DEV")
@@ -30,41 +43,42 @@ if [ "$ROOT_PART_NUM" -ne 2 ]; then
 fi
 
 DISK_SIZE=$(cat "$SYS/block/$ROOT_DISK_NAME/size")
-TARGET_END=$((DISK_SIZE - 1))
-if [ "$TARGET_END" -gt 4294967295 ]; then
-    TARGET_END=4294967295
-fi
-
-# A card that already booted once has the partition at the end of the disk with
-# only the filesystem left to grow; re-growing the partition is pointless.
 PART_START=$(cat "$SYS_PART/start")
-WANT_SIZE=$((TARGET_END - PART_START + 1))
-HAVE_SIZE=$(cat "$SYS_PART/size")
+BEFORE=$(cat "$SYS_PART/size")
+echo "cardputerzero-resize: partition $ROOT_PART_NUM is $BEFORE sectors on a $DISK_SIZE sector disk"
 
-if [ "$HAVE_SIZE" -ge "$WANT_SIZE" ]; then
-    echo "cardputerzero-resize: partition already ends at sector $((PART_START + HAVE_SIZE - 1)), skipping growpart"
-else
-    echo "cardputerzero-resize: growing partition $ROOT_PART_NUM on $ROOT_DISK to sector $TARGET_END"
-    growpart "$ROOT_DISK" "$ROOT_PART_NUM" || echo "cardputerzero-resize: growpart exited $?" >&2
+# Non-zero here is usually NOCHANGE, meaning the partition already spans the
+# usable space. The slack check below decides whether that is good enough.
+growpart "$ROOT_DISK" "$ROOT_PART_NUM" || echo "cardputerzero-resize: growpart made no change"
 
-    # Rewriting the table is not enough - the kernel keeps the old size until it
-    # is told. partprobe fails EBUSY on a mounted partition; partx --update
-    # issues BLKPG_RESIZE_PARTITION, which the kernel accepts for the live root.
-    partx --update "$ROOT_DISK" 2>/dev/null || partprobe "$ROOT_DISK" 2>/dev/null || true
+# Rewriting the table is not enough - the kernel keeps the old size until told.
+# partprobe fails EBUSY on the mounted root; partx --update issues
+# BLKPG_RESIZE_PARTITION, which the kernel accepts for the live root.
+partx --update "$ROOT_DISK" 2>/dev/null || partprobe "$ROOT_DISK" 2>/dev/null || true
+
+AFTER=$(cat "$SYS_PART/size")
+if [ "$AFTER" != "$BEFORE" ]; then
+    echo "cardputerzero-resize: partition grew from $BEFORE to $AFTER sectors"
 fi
 
-# Fail loudly instead of reporting success with the filesystem still small: the
-# kernel has to agree on the new size before resize2fs can grow into it. Leaving
-# the marker unwritten is what lets the service retry on the next boot.
-HAVE_SIZE=$(cat "$SYS_PART/size")
-if [ "$HAVE_SIZE" -lt "$WANT_SIZE" ]; then
-    echo "cardputerzero-resize: kernel still reports $HAVE_SIZE sectors for $ROOT_PART_NAME, expected $WANT_SIZE - filesystem not grown" >&2
+SLACK=$(( DISK_SIZE - PART_START - AFTER ))
+if [ "$SLACK" -gt "$MAX_SLACK" ]; then
+    echo "cardputerzero-resize: $SLACK sectors still unused at the end of $ROOT_DISK (partition is $AFTER sectors) - growpart did not expand it" >&2
     exit 1
 fi
 
 echo "cardputerzero-resize: expanding filesystem on $ROOT_DEV"
 resize2fs "$ROOT_DEV"
 
+# Prove the filesystem actually spans the partition. Without this a no-op
+# resize2fs looks like success, and the marker would then suppress every retry.
+PART_BYTES=$(( AFTER * 512 ))
+FS_BYTES=$(df -B1 --output=size / | tail -1 | tr -d ' ')
+if [ -z "$FS_BYTES" ] || [ "$FS_BYTES" -lt $(( PART_BYTES - 1048576 )) ]; then
+    echo "cardputerzero-resize: filesystem is ${FS_BYTES:-unknown} bytes but the partition is $PART_BYTES - resize2fs did not grow it" >&2
+    exit 1
+fi
+
 mkdir -p "$(dirname "$DONE")"
 : > "$DONE"
-echo "cardputerzero-resize: done, marker $DONE written"
+echo "cardputerzero-resize: done, filesystem $FS_BYTES of $PART_BYTES bytes, marker $DONE written"

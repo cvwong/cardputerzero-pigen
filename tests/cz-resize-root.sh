@@ -4,14 +4,17 @@
 # before switch_root, so 02-run.sh drops the token and this script grows the
 # root filesystem from a first-boot service instead.
 #
-# Two traps this covers, both of which were hit on real hardware:
-#   1. parted prompts "Partition ... is being used. Are you sure you want to
-#      continue?" when root is already mounted, and with no tty under systemd it
-#      exits 1 - the 2026-11-26 22:03 first boot failed exactly this way. Hence
+# Three traps, all of which were hit on real hardware:
+#   1. parted prompts "Partition ... is being used" when root is mounted and,
+#      with no tty under systemd, exits 1 - the 2026-11-26 22:03 failure. Hence
 #      growpart, and an assertion that parted is never invoked.
-#   2. Rewriting the partition table does not resize the filesystem. Without a
-#      kernel re-read resize2fs silently grows nothing and exits 0, so the
-#      script must fail loudly and leave the retry marker unwritten.
+#   2. Rewriting the partition table does not resize the filesystem, and without
+#      a kernel re-read resize2fs silently grows nothing and exits 0.
+#   3. Raspberry Pi Imager expands the last partition itself but stops 33
+#      sectors short of the end, so growpart answers NOCHANGE. Demanding the
+#      partition end exactly at disk_size-1 - as the first version did - turned
+#      that into a hard failure on the 2026-11-26 23:08 boot and left a 28.6G
+#      partition holding a 2.6G filesystem at 93% full.
 # Run: bash tests/cz-resize-root.sh
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -27,13 +30,14 @@ export CZ_TABLE_OK="$WORK/table_ok"
 export CZ_RESIZE_SYS="$SYS"
 export CZ_RESIZE_DONE="$WORK/etc/cardputerzero/resize.done"
 
-# Geometry of the real 29.1G card: 61069312 sectors, rootfs starting at 1064960
-# and shipped at 2.6G, so the target end is 61069311 and the target size the
-# 60004352 sectors resize_early left behind on the failed boot.
+# Real geometry of the 29.1G card: 61069312 sectors, rootfs starting at 1064960
+# and shipped at 2.6G. 60004319 is what Raspberry Pi Imager actually leaves
+# behind - 33 sectors short of the end of the disk.
 DISK_SECTORS=61069312
 PART_START=1064960
 FRESH_SIZE=5472256
-GROWN_SIZE=60004352
+IMAGER_SIZE=60004319
+GROWN_END=$(( DISK_SECTORS - PART_START - 33 ))
 
 printf '#!/bin/sh\necho /dev/mmcblk0p2\n' > "$MOCK/findmnt"
 cat > "$MOCK/lsblk" <<'EOF'
@@ -43,15 +47,14 @@ case "$2" in
   PKNAME) echo mmcblk0 ;;
 esac
 EOF
-# growpart rewrites the table but the kernel keeps the old size until partx
-# tells it, so deliberately do NOT touch sysfs here. It records whether the
-# table was actually rewritten, because partx can only report what is in it -
-# a mock that grew the size after a failed growpart would hide a real bug.
+# growpart rewrites the table, but the kernel keeps the old size until partx
+# tells it - so do NOT touch sysfs here. NOCHANGE (exit 1) is the normal answer
+# once the partition already spans the usable space.
 cat > "$MOCK/growpart" <<'EOF'
 #!/bin/sh
 printf 'growpart %s\n' "$*" >> "$CZLOG"
 rm -f "$CZ_TABLE_OK"
-[ "${CZ_TEST_GROWPART_FAIL:-0}" = 1 ] && exit 1
+[ "${CZ_TEST_GROWPART_NOCHANGE:-0}" = 1 ] && { echo "NOCHANGE: partition $2 is size 1. it cannot be grown"; exit 1; }
 : > "$CZ_TABLE_OK"
 EOF
 cat > "$MOCK/partx" <<'EOF'
@@ -59,7 +62,7 @@ cat > "$MOCK/partx" <<'EOF'
 printf 'partx %s\n' "$*" >> "$CZLOG"
 [ "${CZ_TEST_PARTX_FAIL:-0}" = 1 ] && exit 1
 [ -e "$CZ_TABLE_OK" ] || exit 0
-printf '%s' "$CZ_TEST_NEW_SIZE" > "$CZ_SIZE_FILE"
+printf '%s' "$GROWN_END_MOCK" > "$CZ_SIZE_FILE"
 EOF
 cat > "$MOCK/partprobe" <<'EOF'
 #!/bin/sh
@@ -67,12 +70,22 @@ printf 'partprobe %s\n' "$*" >> "$CZLOG"
 # Realistic default: EBUSY, because the partition being grown is the live root.
 [ "${CZ_TEST_PARTPROBE_OK:-0}" = 1 ] || exit 1
 [ -e "$CZ_TABLE_OK" ] || exit 0
-printf '%s' "$CZ_TEST_NEW_SIZE" > "$CZ_SIZE_FILE"
+printf '%s' "$GROWN_END_MOCK" > "$CZ_SIZE_FILE"
+EOF
+# df is how the script proves resize2fs actually did something.
+cat > "$MOCK/df" <<'EOF'
+#!/bin/sh
+printf 'Size\n%s\n' "$CZ_TEST_FS_BYTES"
 EOF
 # Recorded only so the tests can prove parted is never reached.
 printf '#!/bin/sh\nprintf "parted %%s\\n" "$*" >> "$CZLOG"\n' > "$MOCK/parted"
 printf '#!/bin/sh\nprintf "resize2fs %%s\\n" "$*" >> "$CZLOG"\n' > "$MOCK/resize2fs"
 chmod +x "$MOCK"/*
+export GROWN_END_MOCK="$GROWN_END"
+# resize-root sets its own PATH so growpart can find sfdisk in /usr/sbin; the
+# mocks have to stay ahead of it or the test silently runs against the host's
+# own root device.
+export CZ_RESIZE_PATH="$MOCK:$PATH"
 
 fail=0
 ok()  { printf 'PASS: %s\n' "$1"; }
@@ -80,22 +93,20 @@ bad() { printf 'FAIL: %s\n' "$1"; fail=1; }
 calls() { cat "$CZLOG" 2>/dev/null; }
 
 mkfixture() { # disk_sectors part_start part_size part_num
-    rm -rf "$SYS" "$WORK/etc"; rm -f "$CZ_TABLE_OK"; mkdir -p "$SYS/block/mmcblk0/mmcblk0p2"
+    rm -rf "$SYS" "$WORK/etc"; rm -f "$CZ_TABLE_OK"
+    mkdir -p "$SYS/block/mmcblk0/mmcblk0p2"
     printf '%s' "$1" > "$SYS/block/mmcblk0/size"
     printf '%s' "$2" > "$SYS/block/mmcblk0/mmcblk0p2/start"
     printf '%s' "$3" > "$SYS/block/mmcblk0/mmcblk0p2/size"
     printf '%s' "$4" > "$SYS/block/mmcblk0/mmcblk0p2/partition"
     export CZ_SIZE_FILE="$SYS/block/mmcblk0/mmcblk0p2/size"
-    # What the kernel will report once the table is re-read: grow to the capped
-    # end of the disk, matching the script's own WANT_SIZE arithmetic.
-    local end=$(( $1 - 1 )); [ "$end" -gt 4294967295 ] && end=4294967295
-    export CZ_TEST_NEW_SIZE=$(( end - $2 + 1 ))
+    export CZ_TEST_FS_BYTES=$(( GROWN_END * 512 ))
     : > "$CZLOG"
-    unset CZ_TEST_PARTX_FAIL CZ_TEST_PARTPROBE_OK CZ_TEST_GROWPART_FAIL
+    unset CZ_TEST_PARTX_FAIL CZ_TEST_PARTPROBE_OK CZ_TEST_GROWPART_NOCHANGE
 }
 run() { out=$(env PATH="$MOCK:$PATH" bash "$CZ" 2>&1); rc=$?; }
 
-echo "=== freshly flashed card: partition 2.6G on a 29G disk ==="
+echo "=== freshly flashed card, nothing has grown the partition yet ==="
 mkfixture "$DISK_SECTORS" "$PART_START" "$FRESH_SIZE" 2
 run
 [ "$rc" = 0 ] && ok "exit 0" || bad "exit $rc: $out"
@@ -107,31 +118,50 @@ case "$(calls)" in *"partx --update /dev/mmcblk0"*) ok "re-read the table with p
     *) bad "never called partx --update" ;; esac
 case "$(calls)" in *"resize2fs /dev/mmcblk0p2"*) ok "grew the filesystem" ;;
     *) bad "never called resize2fs: $(calls)" ;; esac
+case "$out" in *"grew from $FRESH_SIZE to $GROWN_END"*) ok "reported the partition growth" ;;
+    *) bad "did not report growth: $out" ;; esac
 [ -e "$CZ_RESIZE_DONE" ] && ok "wrote the retry marker" || bad "no marker - the service would run on every boot"
 
-echo "=== partition already grown, filesystem not (the state of the failed card) ==="
-mkfixture "$DISK_SECTORS" "$PART_START" "$GROWN_SIZE" 2
+echo "=== Imager already grew it: growpart says NOCHANGE (the 23:08 failure) ==="
+mkfixture "$DISK_SECTORS" "$PART_START" "$IMAGER_SIZE" 2
+export CZ_TEST_GROWPART_NOCHANGE=1
 run
-[ "$rc" = 0 ] && ok "exit 0" || bad "exit $rc: $out"
-case "$(calls)" in *growpart*) bad "ran growpart on an already-grown partition" ;;
-    *) ok "skipped the partition grow" ;; esac
-case "$out" in *"skipping growpart"*) ok "says why it skipped" ;;
-    *) bad "no explanation for the skip: $out" ;; esac
-case "$(calls)" in *resize2fs*) ok "still grew the filesystem" ;;
-    *) bad "skipped resize2fs, so the card stays at 2.6G" ;; esac
+[ "$rc" = 0 ] && ok "exit 0 despite growpart's NOCHANGE" || bad "exit $rc: $out"
+case "$out" in *"growpart made no change"*) ok "reported the NOCHANGE" ;;
+    *) bad "NOCHANGE not surfaced: $out" ;; esac
+case "$(calls)" in *resize2fs*) ok "still ran resize2fs - this is the case that was being skipped" ;;
+    *) bad "skipped resize2fs, leaving a 2.6G filesystem on a 28.6G partition" ;; esac
 [ -e "$CZ_RESIZE_DONE" ] && ok "wrote the marker" || bad "no marker"
 
-echo "=== kernel never learns the new size: fail loudly, do not mark done ==="
+echo "=== growpart cannot grow and the partition really is still small ==="
+mkfixture "$DISK_SECTORS" "$PART_START" "$FRESH_SIZE" 2
+export CZ_TEST_GROWPART_NOCHANGE=1
+run
+[ "$rc" = 1 ] && ok "exit 1 rather than pretending to succeed" || bad "exit $rc"
+case "$out" in *"sectors still unused at the end"*) ok "names the ungrown partition" ;;
+    *) bad "no useful diagnostic: $out" ;; esac
+case "$(calls)" in *resize2fs*) bad "ran resize2fs on a partition that never grew" ;;
+    *) ok "did not run resize2fs" ;; esac
+[ -e "$CZ_RESIZE_DONE" ] && bad "wrote the marker despite failing - no retry would happen" \
+    || ok "left the marker unwritten so the next boot retries"
+
+echo "=== resize2fs silently does nothing: the filesystem check catches it ==="
+mkfixture "$DISK_SECTORS" "$PART_START" "$IMAGER_SIZE" 2
+export CZ_TEST_GROWPART_NOCHANGE=1
+export CZ_TEST_FS_BYTES=$(( FRESH_SIZE * 512 ))
+run
+[ "$rc" = 1 ] && ok "exit 1 on a no-op resize2fs" || bad "exit $rc - a silent no-op resize"
+case "$out" in *"resize2fs did not grow it"*) ok "says the filesystem is still small" ;;
+    *) bad "no diagnostic: $out" ;; esac
+[ -e "$CZ_RESIZE_DONE" ] && bad "marked done after a no-op resize" || ok "no marker written"
+
+echo "=== kernel never learns the new size ==="
 mkfixture "$DISK_SECTORS" "$PART_START" "$FRESH_SIZE" 2
 export CZ_TEST_PARTX_FAIL=1
 run
-[ "$rc" = 1 ] && ok "exit 1 instead of claiming success" || bad "exit $rc - a silent no-op resize"
-case "$out" in *"kernel still reports"*) ok "names the real problem" ;;
-    *) bad "no diagnostic: $out" ;; esac
+[ "$rc" = 1 ] && ok "exit 1 instead of claiming success" || bad "exit $rc"
 case "$(calls)" in *resize2fs*) bad "called resize2fs against a stale partition size" ;;
     *) ok "did not run resize2fs against the old size" ;; esac
-[ -e "$CZ_RESIZE_DONE" ] && bad "wrote the marker despite failing - the retry would never happen" \
-    || ok "left the marker unwritten so the next boot retries"
 
 echo "=== partprobe fallback when partx is unavailable ==="
 mkfixture "$DISK_SECTORS" "$PART_START" "$FRESH_SIZE" 2
@@ -143,15 +173,6 @@ case "$(calls)" in *partprobe*) ok "fell back to partprobe" ;;
 case "$(calls)" in *resize2fs*) ok "grew the filesystem after the fallback" ;;
     *) bad "no resize2fs after a successful partprobe" ;; esac
 
-echo "=== growpart itself fails: the guard still catches it ==="
-mkfixture "$DISK_SECTORS" "$PART_START" "$FRESH_SIZE" 2
-export CZ_TEST_GROWPART_FAIL=1
-run
-[ "$rc" = 1 ] && ok "exit 1" || bad "exit $rc despite growpart failing"
-case "$out" in *"growpart exited 1"*) ok "reports growpart's failure" ;;
-    *) bad "swallowed the growpart failure: $out" ;; esac
-[ -e "$CZ_RESIZE_DONE" ] && bad "marked done after a failed growpart" || ok "no marker written"
-
 echo "=== root not on partition 2: leave the disk alone ==="
 mkfixture "$DISK_SECTORS" "$PART_START" "$FRESH_SIZE" 3
 run
@@ -161,14 +182,9 @@ case "$out" in *"unexpected partition layout"*) ok "explains the skip" ;;
 case "$(calls)" in *growpart*|*resize2fs*) bad "touched the disk anyway: $(calls)" ;;
     *) ok "changed nothing" ;; esac
 
-echo "=== disks past 2TiB are capped at the 32-bit sector limit ==="
-mkfixture 9000000000 "$PART_START" "$FRESH_SIZE" 2
-run
-[ "$rc" = 0 ] && ok "exit 0 on an oversized disk" || bad "exit $rc: $out"
-[ "$CZ_TEST_NEW_SIZE" = 4293902336 ] && ok "target size capped via 4294967295" \
-    || bad "cap not applied: CZ_TEST_NEW_SIZE=$CZ_TEST_NEW_SIZE"
-case "$(calls)" in *resize2fs*) ok "still grew the filesystem" ;;
-    *) bad "no resize2fs on the capped path: $(calls)" ;; esac
+echo "=== growpart can find sfdisk, which lives in /usr/sbin ==="
+grep -qE '^PATH=.*/usr/sbin' "$CZ" && ok "sets a PATH containing /usr/sbin" \
+    || bad "no explicit PATH - growpart fails with 'Did not have sfdisk or sgdisk in PATH'"
 
 echo "=== unit wiring: it must be able to retry after a failure ==="
 grep -q '^ConditionPathExists=!/etc/cardputerzero/resize.done$' "$UNIT" \
@@ -177,7 +193,6 @@ grep -q '^ConditionFirstBoot' "$UNIT" && bad "ConditionFirstBoot is back - a fai
     || ok "no ConditionFirstBoot directive"
 grep -q '^ExecStartPost=.*disable' "$UNIT" && bad "still self-disables, which also blocks retries" \
     || ok "does not self-disable"
-# The script's marker path and the unit's condition must agree, or the gate never opens.
 SCRIPT_DONE=$(sed -n 's|^DONE=${CZ_RESIZE_DONE:-\(.*\)}$|\1|p' "$CZ")
 UNIT_DONE=$(sed -n 's|^ConditionPathExists=!\(.*\)$|\1|p' "$UNIT")
 [ -n "$SCRIPT_DONE" ] && [ "$SCRIPT_DONE" = "$UNIT_DONE" ] \
