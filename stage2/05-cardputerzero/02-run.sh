@@ -24,6 +24,19 @@ for cmd in "${ROOTFS_DIR}/boot/firmware/cmdline.txt" "${ROOTFS_DIR}/boot/cmdline
             # Probe-defer noise (e.g. bcm2835 spi -517) is KERN_ERR; keep it in
             # the journal but off every console, including the monitor fb.
             if (t ~ /^loglevel=/) continue
+            # ` resize` makes the initramfs run resize_early (grows the
+            # partition) and then set_partuuid, which randomises the MBR disk id
+            # with `dd if=/dev/hwrng of=<disk> bs=4 seek=110`. On this board that
+            # boot never reached switch_root: the partition had been grown and
+            # root plus bootfs were left mounted rw, but the disk id was still
+            # the image one, cmdline had not been rewritten, and systemd never
+            # wrote a file. Dropping the token makes both scripts exit at once;
+            # cardputerzero-resize.service grows the root filesystem from
+            # userspace instead (installed by 01-run.sh). Side effect: the disk
+            # id is no longer randomised, so every card from this image keeps the
+            # same PARTUUIDs - harmless for one card per machine, and it keeps
+            # cmdline.txt and /etc/fstab permanently consistent.
+            if (t == "resize") continue
             if (keep != "1" && t == "console=serial0,115200") continue
             out = out (out == "" ? "" : " ") t
         }

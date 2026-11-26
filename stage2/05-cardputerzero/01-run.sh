@@ -59,3 +59,12 @@ rm -rf /tmp/dtoverlays
 
 CHROOT
 install -D -m 0755 files/cz-font "${ROOTFS_DIR}/usr/local/bin/cz-font"
+
+# 02-run.sh drops the ` resize` cmdline token because the initramfs resize path
+# (resize_early + set_partuuid) hangs on this board before switch_root, so grow
+# the root partition and filesystem from userspace on first boot instead.
+install -D -m 0755 files/resize-root "${ROOTFS_DIR}/usr/lib/cardputerzero/resize-root"
+install -D -m 0644 files/cardputerzero-resize.service "${ROOTFS_DIR}/etc/systemd/system/cardputerzero-resize.service"
+on_chroot << 'CHROOT'
+systemctl enable cardputerzero-resize.service
+CHROOT
