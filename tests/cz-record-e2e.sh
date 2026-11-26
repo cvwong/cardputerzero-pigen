@@ -6,6 +6,13 @@
 # reported instead of being saved as a "successful" recording.
 # Run: bash tests/cz-record-e2e.sh
 set -u
+# Pin stdin off any terminal. cz-record branches on `[ -t 0 ]`: with a tty it
+# waits for a keypress to stop a capture, without one it simply waits for the
+# capture to finish. This suite drives the non-interactive path and feeds keys
+# only where it means to (menu, picker, delete confirm), so the outcome must not
+# depend on whether the harness happens to allocate a pty. Individual commands
+# still override this with an explicit pipe.
+exec < /dev/null
 # Box drawing is multibyte; without a UTF-8 locale awk counts bytes, not columns.
 export LC_ALL=C.UTF-8
 HERE="$(cd "$(dirname "$0")" && pwd)"
