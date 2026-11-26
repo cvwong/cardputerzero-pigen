@@ -7,7 +7,8 @@ rpicam-apps-core
 rpicam-apps-encoder
 tmux
 v4l-utils
-cage
-foot
-seatd
+# cage/foot/seatd are gone: the monitor is a plain console on tty2, so the
+# kernel keymap switches VTs in both directions rather than the return trip
+# depending on a Wayland client's keybinding. fonts-dejavu-core stays because
+# fontconfig-config lists it as an alternative, and 2 MB is not worth the risk.
 fonts-dejavu-core

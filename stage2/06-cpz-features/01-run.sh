@@ -46,13 +46,21 @@ install -D -m 0755 files/cz-files "${ROOTFS_DIR}/usr/local/bin/cz-files"
 install -D -m 0755 files/cz-files-web.py "${ROOTFS_DIR}/usr/local/lib/cz-files-web.py"
 install -D -m 0755 files/cz-font "${ROOTFS_DIR}/usr/local/bin/cz-font"
 install -D -m 0755 files/cz-output "${ROOTFS_DIR}/usr/local/bin/cz-output"
-install -D -m 0755 files/cz-monitor-session "${ROOTFS_DIR}/usr/local/bin/cz-monitor-session"
-install -D -m 0755 files/cz-cage-watcher "${ROOTFS_DIR}/usr/local/sbin/cz-cage-watcher"
-install -D -m 0644 files/cz-cage.service "${ROOTFS_DIR}/etc/systemd/system/cz-cage.service"
-install -D -m 0644 files/cz-cage-watcher.service "${ROOTFS_DIR}/etc/systemd/system/cz-cage-watcher.service"
-install -D -m 0644 files/foot.ini "${ROOTFS_DIR}/etc/foot/foot.ini"
+# The monitor is a plain console on tty2, which cz-display-switch maps to the
+# HDMI fb, with getty@tty2 supplying the login. The kernel keymap in
+# cz-console-switch.map then switches VTs in BOTH directions - something the
+# cage+foot compositor could not do: once cage held the input seat the kernel
+# keymap was bypassed, so the only way back to the panel was a foot keybinding,
+# and that never fired. Retire the compositor stack. Purge the packages too,
+# because pi-gen's cached rootfs keeps installed anything dropped from
+# 00-packages (the same trap 4cf5032 hit with files).
+on_chroot << 'CHROOT'
+systemctl disable cz-cage-watcher.service seatd.service 2>/dev/null || true
+apt-get purge -y cage foot seatd
+CHROOT
 # Cached rootfses keep files from earlier builds; the frozen-frame monitor
-# stack was retired in 0494215, so remove it explicitly.
+# stack was retired in 0494215 and the compositor that replaced it is retired
+# here, so remove both explicitly along with their enable symlinks.
 rm -f "${ROOTFS_DIR}/usr/local/sbin/cz-monitor-view" \
       "${ROOTFS_DIR}/usr/local/sbin/cz-monitor-repaint" \
       "${ROOTFS_DIR}/usr/local/bin/cz-monitor-shell" \
@@ -62,7 +70,14 @@ rm -f "${ROOTFS_DIR}/usr/local/sbin/cz-monitor-view" \
       "${ROOTFS_DIR}/etc/systemd/system/cz-monitor-repaint.path" \
       "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/cz-monitor-view.service" \
       "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/cz-monitor-tty2.service" \
-      "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/cz-monitor-repaint.path"
+      "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/cz-monitor-repaint.path" \
+      "${ROOTFS_DIR}/usr/local/bin/cz-monitor-session" \
+      "${ROOTFS_DIR}/usr/local/sbin/cz-cage-watcher" \
+      "${ROOTFS_DIR}/etc/systemd/system/cz-cage.service" \
+      "${ROOTFS_DIR}/etc/systemd/system/cz-cage-watcher.service" \
+      "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/cz-cage.service" \
+      "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/cz-cage-watcher.service" \
+      "${ROOTFS_DIR}/etc/foot/foot.ini"
 HN=$(cat "${ROOTFS_DIR}/etc/hostname")
 sed -i '/^127\.0\.1\.1[[:space:]]/d' "${ROOTFS_DIR}/etc/hosts"
 printf '127.0.1.1\t%s\n' "$HN" >> "${ROOTFS_DIR}/etc/hosts"
@@ -86,5 +101,5 @@ install -D -m 0644 files/cz-firstboot.service "${ROOTFS_DIR}/etc/systemd/system/
 on_chroot << 'CHROOT'
 systemctl enable cz-splash.service
 systemctl enable cz-firstboot.service
-systemctl enable seatd.service cz-cage-watcher.service
+systemctl enable getty@tty2.service
 CHROOT
