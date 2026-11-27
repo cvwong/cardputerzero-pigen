@@ -1,23 +1,20 @@
 # HDMI behaviour on CardputerZero
 
-Measured on hardware 2026-11-27, image `aec9118`, board `Raspberry Pi Compute
-Module 0 Rev 1.0`, kernel `6.18.39+rpt-rpi-v8`.
+Measured on hardware 2026-11-27, board `Raspberry Pi Compute Module 0 Rev 1.0`,
+kernel `6.18.39+rpt-rpi-v8`. Two fixes resulted: `1b8afce` (framebuffer wake) and
+`6ef1d5c` (reduced-blanking mode), both verified on the device.
 
 ## Summary
 
-Three rules follow from the measurements below, and all are easy to get wrong:
-
-1. **The HDMI resolution is decided at boot**, by whether EDID can be read then.
-   Attach the monitor *before* powering on to get 1920x1080; boot without one and
-   the connector carries only the 1024x768 no-EDID fallback.
-2. **Unplugging and replugging does not break the output.** The force keeps the
-   connector enabled and bound to a CRTC, so the monitor re-syncs on its own with
-   no kernel event. It does *not* return the console to the built-in panel —
-   `Alt+p` does that, and works.
-3. **Never write `detect` to the connector's `status`.** It clears the force-on
-   flag, and the delayed re-probe can leave the connector `disconnected`,
-   `disabled`, with zero modes and no CRTC — a permanently blank monitor until
-   `echo on` or a reboot. This was observed, not theorised; see below.
+1. **1080p works with or without a monitor at boot.** The forced mode uses CVT
+   reduced-blanking timings (`1920x1080MR@60D`), which vc4 accepts. Plain
+   `1920x1080@60D` was rejected outright.
+2. **The HDMI framebuffer must be woken explicitly.** `cz-display-switch` now does
+   it; nothing else did, which left a black picture with the signal up.
+3. **Unplugging and replugging is safe**, and does not return the console to the
+   panel — `Alt+p` does that. No kernel hotplug event fires either way.
+4. **Never write `detect` to the connector's `status`.** It clears the force-on
+   flag and can leave the output dead until `echo on` or a reboot.
 
 **Resolve the connector path, never hardcode it.** The DRM card index moves
 between boots: one boot had `card0 -> vc4-drm` (`card0-HDMI-A-1`), the next had
@@ -32,103 +29,87 @@ H=$(ls -d /sys/class/drm/card*-HDMI-A-1 | head -1)
 (`vc4drmfb`), not a card index. The debugfs state also appears under several
 aliases for the same card (`dri/1/state`, `dri/soc:gpu/state`, `dri/128/state`).
 
-## Symptom
+## The mode rejection, and its fix
 
-Two observations that look like bugs but are not:
-
-- An attached monitor runs at 1024x768 rather than the 1920x1080 requested by
-  `video=HDMI-A-1:1920x1080@60D` in `cmdline.txt`.
-- Pulling the HDMI cable while looking at the monitor leaves the panel showing
-  a stale frame, with the session stranded on tty2.
-
-## What is actually happening
-
-EDID is read **once at boot** and cached. HPD never asserts afterwards, so
-nothing re-probes the connector:
-
-- Monitor present at boot -> EDID read -> the connector carries real modes,
-  including 1920x1080, and `fb0` is 1920x1080.
-- Monitor absent at boot -> no EDID -> the kernel falls back to
-  `drm_add_modes_noedid(connector, 1024, 768)`, whose cap is **exactly** the
-  1024x768 that gets observed. That number is the fallback's ceiling, not a
-  mis-parsed `video=` argument.
-
-The force itself works. The kernel logs it explicitly:
+With plain `video=HDMI-A-1:1920x1080@60D` the kernel logged, twice per boot:
 
 ```
-[drm] forcing HDMI-A-1 connector on
+[drm] User-defined mode not supported: "1920x1080":
+    60 172780 1920 2040 2248 2576 1080 1081 1084 1118 0x20 0x6
 ```
 
-So `video=` is parsed and applied; the connector is forced on regardless of
-cable state, which is why `status` reads `connected` even with nothing plugged
-in. `stage2/05-cardputerzero/02-run.sh:21-23` documents why the force exists,
-and line 49 appends the token.
+That is CVT with htotal 2576 and a **172780 kHz** pixel clock (59.99 Hz). vc4
+refuses it. With no accepted user mode and no EDID, the connector was left with
+only `drm_add_modes_noedid(connector, 1024, 768)`, whose ceiling is exactly the
+1024x768 that was observed.
 
-## Evidence
+Adding `MR` (CVT + reduced blanking) gives htotal 2080 and **138611 kHz** measured
+(138653 predicted from 2080 x 1111 x 60), comfortably under the 148500 kHz CEA
+clock vc4 drives from EDID. Both flags are load-bearing; `02-run.sh` carries the
+reasoning next to the token.
 
-Read from `$(ls -d /sys/class/drm/card*-HDMI-A-1)` and `/sys/class/graphics/fb*/`
-on the same card, before and after pulling the cable. (These readings were taken
-on a boot where vc4 happened to be `card0`; the later replug retest found it at
-`card1`.)
+Verified with **no monitor at boot** (`edid` 0 bytes), which is the case that was
+broken:
 
-| signal | monitor attached at boot | after unplugging |
+| | before (`@60D`) | after (`MR@60D`) |
+| --- | --- | --- |
+| rejection message | present, twice | **absent** |
+| 1920x1080 in mode list | 0 | **1, first entry** |
+| `fb0` | 1024,768 | **1920,1080** |
+| `tmds_char_rate` | 65000000 | **138611000** |
+| connector | bound | bound to `crtc=pixelvalve-2` |
+
+The force-**on** half always worked (`[drm] forcing HDMI-A-1 connector on`); the
+force-**mode** half never did. An earlier reading recorded 1024x768 as "just the
+no-EDID fallback", missing that the fallback was reached *because* the requested
+mode was refused.
+
+## The framebuffer wake
+
+`fbcon=map:0` starts every console on fb0; `lcd-console` then moves tty1 to the
+panel, and nothing woke the framebuffer it left behind. A monitor attached after
+boot got a black picture with the signal up — HVS channel in use, tmds clock
+running, connector bound to a CRTC — and switching to tty2 did not fix it.
+`cz-splash`'s `FBIOBLANK` targeted the panel only.
+
+`cz-display-switch` now writes 0 to the HDMI fb's `blank`, on every run and
+**before** its state cache can short-circuit, so a reattach with an unchanged fb
+layout still gets woken. The panel's `blank` is deliberately untouched.
+
+**`blank` is not a usable readout.** It reads 4 again afterwards even while the
+monitor is displaying, and it also reads 4 whenever tty1 is the foreground VT
+because fbcon renders only the foreground console. Judge by the picture — an
+earlier reading of it nearly led me to call a working output dead. The monitor is
+a live terminal: typing on it while tty2 is foreground echoes.
+
+(This is distinct from the panel's `KD_GRAPHICS` blanking issue, where an explicit
+`FBIOBLANK` really is required — see `cz-splash`.)
+
+## Hotplug: nothing to hook
+
+Same card, monitor attached at boot, before and after pulling the cable:
+
+| signal | attached | after unplugging |
 | --- | --- | --- |
 | `edid` | 256 bytes | **256 bytes** (stale cache) |
 | `status` | connected | connected |
 | `enabled` / `dpms` | enabled / On | enabled / On |
-| `1920x1080` entries in `modes` | 3 | **3** |
+| 1920x1080 modes | 3 | **3** |
 | total `modes` | 29 | 29 |
-| `fb0` | vc4drmfb 1920,1080 | 1920,1080 |
 | kernel drm/udev event | - | **none** |
 | `cz-display-switch` ran | - | **no** |
 | `/run/cz-display-switch.state` | `1 0` | `1 0` |
 
-An earlier card, booted without a readable monitor, showed `edid` 0 bytes,
-`fb0 1024,768` and no 1920x1080 entry at all. Both readings are correct; they
-describe different boot-time conditions, not different behaviour of the force.
+EDID is read once at boot and cached; HPD never asserts, so nothing re-probes.
+Replugging still works because the force keeps the output enabled and bound to a
+CRTC — the monitor re-syncs on its own.
 
-## Why the unplug branch never runs
-
-`stage2/05-cardputerzero/files/cz-display-switch` does have the right code:
-
-- `hdmi_fb()` (line 28) matches purely on `name == vc4drmfb` (line 31).
-- Line 46 takes the HDMI-present branch whenever that framebuffer exists.
-- The `else` at line 48 is the unplug path, and line 52 issues `chvt 1` to bring
-  the foreground console home.
-
-Because the forced mode keeps `vc4drmfb` registered permanently, `H` is never
-empty, so **line 52 is unreachable**. This is a code fact independent of the
-hotplug question: even if a hotplug event arrived, the branch would not be taken.
-
-`tests/cz-display-switch.sh` simulates unplug by deleting the vc4 framebuffer
-from its fake sysfs. That state never occurs on this hardware, so its green run
-does **not** cover the real unplug path.
-
-## `fb0/blank` is not a health signal
-
-`/sys/class/graphics/fb0/blank` reads `4` (FB_BLANK_POWERDOWN) whenever tty1 is
-the foreground VT, because fbcon only renders the foreground console. Every
-reading taken during this investigation was with tty1 foreground, which made the
-monitor look powered down.
-
-The monitor is in fact a **live terminal**: typing on it while tty2 is foreground
-echoes. Do not infer a stale frame from `blank=4`. (This is distinct from the
-panel's `KD_GRAPHICS` blanking issue, where an explicit `FBIOBLANK` really is
-required — see `cz-splash`.)
-
-## Practical guidance
-
-- Attach the monitor before power-on if you want 1080p.
-- Use `Alt+M` to go out to the monitor and `Alt+p` to come back. Both are kernel
-  keymap bindings (`cz-console-switch.map`), so they work in both directions with
-  no compositor involved.
-- Unplugging and replugging the cable is safe: verified from a clean boot, the
-  monitor came back with EDID 256 bytes, 1920x1080 and the connector still bound
-  to `crtc=pixelvalve-2`, with no kernel event at all.
-- Do not expect cable events to drive anything, and do not write `detect` to
-  `status` to try to provoke one — it disables the output. If the monitor ever
-  goes blank while `Alt+M` still moves the cursor off the panel, check for
-  `crtc=(null)` and 0 modes, then restore with `echo on` or a reboot.
+`cz-display-switch`'s unplug branch is unreachable regardless: `hdmi_fb()` (line
+28) matches only on `name == vc4drmfb` (line 31), which the force keeps registered,
+so line 46 always takes the HDMI-present branch and line 52's `chvt 1` never runs.
+`tests/cz-display-switch.sh` simulates unplug by deleting that framebuffer from
+fake sysfs — a state that never occurs here — so its coverage of the mapping does
+not extend to the real unplug path.
 
 ## Writing `status` clears the force and kills the output
 
@@ -147,45 +128,50 @@ connector HDMI-A-1   crtc=(null)
 all CRTCs enable=0 active=0,  all HVS channels in use=0
 ```
 
-Nothing was scanning out. The user then plugged a monitor in and got a **blank
-screen**, while `Alt+M` still moved the cursor off the panel — the VT switch
-worked, the output did not. `detect` sets the force to unspecified and schedules
-a re-probe; that re-probe found no cable and disabled the connector, and with no
-HPD nothing ever re-enabled it.
+Nothing was scanning out. The user plugged a monitor in and got a **blank screen**
+while `Alt+M` still moved the cursor off the panel — the VT switch worked, the
+output did not. `detect` sets the force to unspecified and schedules a re-probe;
+that re-probe found no cable and disabled the connector, and with no HPD nothing
+ever re-enabled it.
 
-**Recovery:** `echo on` to restore the force, or reboot to reapply the cmdline
-force. A reboot was verified to restore a healthy output (EDID 256 bytes,
-`connected/enabled/On`, 1920x1080, connector bound to `crtc=pixelvalve-2`).
+**Recovery:** `echo on`, or reboot to reapply the cmdline force. A reboot was
+verified to restore a healthy output.
 
-Two lessons worth keeping: a no-change reading immediately after a state-changing
-write is *not yet observed*, not negative evidence; and `status` reads `connected`
-only while the force is intact — it does read `disconnected` once cleared.
+Two lessons: a no-change reading immediately after a state-changing write is *not
+yet observed*, not negative evidence; and `status` reads `connected` only while the
+force is intact — it does read `disconnected` once cleared.
 
 `CONFIG_DRM_LOAD_EDID_FIRMWARE=y` is set, so `drm.edid_firmware=HDMI-A-1:edid/1920x1080.bin`
-remains an untried lever for a genuinely EDID-less monitor. It has not been tested
-here and, unlike the sysfs write, it does not clear the force.
+remains an untried lever for a genuinely EDID-less monitor. Unlike the sysfs write
+it does not clear the force, and it is no longer needed for the case above.
 
-## Still untested
+## Practical guidance
 
-Booting **without** a monitor and attaching one afterwards, from a clean boot with
-the force intact. The force should give `connected` plus the 1024x768 fallback and
-a bound CRTC, so the monitor would be expected to display at 1024x768 — but the one
-report of a blank monitor in that scenario was confounded by the cleared force
-above, so it is not established.
+- 1080p no longer depends on attaching the monitor before power-on.
+- `Alt+M` out to the monitor, `Alt+p` back. Both are kernel keymap bindings
+  (`cz-console-switch.map`), so they work in both directions with no compositor.
+- Unplugging and replugging the cable is safe.
+- Do not expect cable events to drive anything, and do not write `detect` to
+  `status` to provoke one. If the monitor goes blank while `Alt+M` still moves the
+  cursor, check for `crtc=(null)` and 0 modes, then `echo on` or reboot.
 
 ## Corrections worth remembering
 
-Three conclusions were asserted during this investigation and later retracted:
+Four conclusions were asserted here and later retracted:
 
-- "the forced 1920x1080 mode never applies" — it does, when EDID is readable at
-  boot;
-- "the board's HPD/EDID lines never assert, so no attachment signal exists" —
-  EDID was read successfully (256 bytes), so the stronger claim was unproven;
+- "the forced 1920x1080 mode never applies" — the force-on worked; the *mode* was
+  rejected, a different and fixable defect;
+- "the board's HPD/EDID lines never assert, so no attachment signal exists" — EDID
+  read fine (256 bytes), so the stronger claim was unproven;
 - "the `status` writes were inert and left nothing changed" — they took effect on
-  a delay and disabled the user's monitor.
+  a delay and disabled the monitor;
+- "1024x768 is just the no-EDID fallback" — true but incomplete; the fallback was
+  reached because the requested mode was refused.
 
-Each came from reasoning past the available evidence: the first two from a single
-sample on one card, the third from a reading taken immediately after a write whose
-effect was asynchronous. The verified statements are the ones in the Summary.
-Check `edid` byte count and `fb0/virtual_size` on the current card, resolve the
-connector by glob, and re-measure after a delay before calling a probe harmless.
+Each came from reasoning past the evidence: single samples, a reading taken too
+early, or a correct observation with the wrong cause attached. A fifth near-miss
+is worth recording too: two staged installers were reported as run and had not
+executed at all, caught only by checking the installed file's md5 and the absence
+of the backup the script writes first. Verify on the current card, resolve the
+connector by glob, re-measure after a delay, and confirm a step happened before
+building on it.
