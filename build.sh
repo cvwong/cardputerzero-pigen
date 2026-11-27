@@ -182,9 +182,18 @@ export RELEASE=${RELEASE:-trixie} # Don't forget to update stage0/prerun.sh
 export IMG_NAME="${IMG_NAME:-raspios-$RELEASE-$ARCH}"
 
 export USE_QEMU="${USE_QEMU:-0}"
+# Moved up from below the locale/timezone block: the filename needs it, and
+# nothing between here and there depends on the ordering.
+export GIT_HASH=${GIT_HASH:-"$(git rev-parse HEAD)"}
 export IMG_DATE="${IMG_DATE:-"$(date +%Y-%m-%d)"}"
-export IMG_FILENAME="${IMG_FILENAME:-"${IMG_DATE}-${IMG_NAME}"}"
-export ARCHIVE_FILENAME="${ARCHIVE_FILENAME:-"image_${IMG_DATE}-${IMG_NAME}"}"
+# Carry the commit in the filename. IMG_DATE is date-only, so every build on the
+# same day produced the same name and silently overwrote the previous image:
+# three builds on 2026-11-27 all wrote 2026-11-27-cardputerzero-v5-console-lite.img
+# and only the last survived. With the hash, different commits coexist and a
+# rebuild of the same commit replaces only its own output. The .info, .bmap and
+# .sbom derive from IMG_FILENAME, so they follow automatically.
+export IMG_FILENAME="${IMG_FILENAME:-"${IMG_DATE}-${IMG_NAME}-${GIT_HASH:0:7}"}"
+export ARCHIVE_FILENAME="${ARCHIVE_FILENAME:-"image_${IMG_DATE}-${IMG_NAME}-${GIT_HASH:0:7}"}"
 
 export SCRIPT_DIR="${BASE_DIR}/scripts"
 export WORK_DIR="${WORK_DIR:-"${BASE_DIR}/work/${IMG_NAME}"}"
@@ -218,8 +227,6 @@ export KEYBOARD_KEYMAP="${KEYBOARD_KEYMAP:-gb}"
 export KEYBOARD_LAYOUT="${KEYBOARD_LAYOUT:-English (UK)}"
 
 export TIMEZONE_DEFAULT="${TIMEZONE_DEFAULT:-Europe/London}"
-
-export GIT_HASH=${GIT_HASH:-"$(git rev-parse HEAD)"}
 
 export PUBKEY_SSH_FIRST_USER
 
