@@ -7,11 +7,13 @@ SYSFS=${CZ_SPLASH_SYSFS:-/sys/class/graphics}
 
 # Resolve the framebuffer the LCD panel is actually on. lcd-console maps tty1 to
 # the 320x170 panel, but which /dev/fbN that is depends on whether an HDMI output
-# came up first: cmdline forces video=HDMI-A-1:1920x1080@60D, so with a monitor
-# attached HDMI takes fb0 and the panel becomes fb1 (journal 2026-11-26:
+# came up first: cmdline forces video=HDMI-A-1:1920x1080MR@60D, so with a monitor
+# attached HDMI has taken fb0 and the panel fb1 (journal 2026-11-26:
 # "lcd-console: tty1->fb1 (LCD), tty2-6->fb0 (HDMI)"). A hardcoded /dev/fb0 then
 # blits the splash to the monitor and unblanks the monitor, leaving the panel
-# powered down and the login screen dark. Detect it the way lcd-console does.
+# powered down and the login screen dark. Detect it the way lcd-console does:
+# match on size, never on an index. The DRM card index does move between boots
+# (card0 has been both vc4 and the MIPI panel), so nothing here may assume one.
 panel_fb() {
   local d n
   for d in "$SYSFS"/fb[0-9]*; do
