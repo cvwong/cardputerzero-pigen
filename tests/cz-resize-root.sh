@@ -72,10 +72,13 @@ printf 'partprobe %s\n' "$*" >> "$CZLOG"
 [ -e "$CZ_TABLE_OK" ] || exit 0
 printf '%s' "$GROWN_END_MOCK" > "$CZ_SIZE_FILE"
 EOF
-# df is how the script proves resize2fs actually did something.
-cat > "$MOCK/df" <<'EOF'
+# dumpe2fs is how the script proves resize2fs did something. It reports the
+# filesystem's FULL length; df would report data blocks only and come up 1.8%
+# short on ext4 metadata, which is what made the previous check always fail.
+cat > "$MOCK/dumpe2fs" <<'EOF'
 #!/bin/sh
-printf 'Size\n%s\n' "$CZ_TEST_FS_BYTES"
+printf 'Block count:              %s\n' "$CZ_TEST_FS_BLOCKS"
+printf 'Block size:               %s\n' "$CZ_TEST_FS_BSIZE"
 EOF
 # Recorded only so the tests can prove parted is never reached.
 printf '#!/bin/sh\nprintf "parted %%s\\n" "$*" >> "$CZLOG"\n' > "$MOCK/parted"
@@ -100,7 +103,10 @@ mkfixture() { # disk_sectors part_start part_size part_num
     printf '%s' "$3" > "$SYS/block/mmcblk0/mmcblk0p2/size"
     printf '%s' "$4" > "$SYS/block/mmcblk0/mmcblk0p2/partition"
     export CZ_SIZE_FILE="$SYS/block/mmcblk0/mmcblk0p2/size"
-    export CZ_TEST_FS_BYTES=$(( GROWN_END * 512 ))
+    # Mirrors the device exactly: 7500539 blocks x 4096 = 30722207744, which is
+    # 3584 bytes short of the 30722211328-byte partition.
+    export CZ_TEST_FS_BSIZE=4096
+    export CZ_TEST_FS_BLOCKS=$(( GROWN_END * 512 / 4096 - 1 ))
     : > "$CZLOG"
     unset CZ_TEST_PARTX_FAIL CZ_TEST_PARTPROBE_OK CZ_TEST_GROWPART_NOCHANGE
 }
@@ -148,12 +154,37 @@ case "$(calls)" in *resize2fs*) bad "ran resize2fs on a partition that never gre
 echo "=== resize2fs silently does nothing: the filesystem check catches it ==="
 mkfixture "$DISK_SECTORS" "$PART_START" "$IMAGER_SIZE" 2
 export CZ_TEST_GROWPART_NOCHANGE=1
-export CZ_TEST_FS_BYTES=$(( FRESH_SIZE * 512 ))
+export CZ_TEST_FS_BLOCKS=$(( FRESH_SIZE * 512 / 4096 ))
 run
 [ "$rc" = 1 ] && ok "exit 1 on a no-op resize2fs" || bad "exit $rc - a silent no-op resize"
 case "$out" in *"resize2fs did not grow it"*) ok "says the filesystem is still small" ;;
     *) bad "no diagnostic: $out" ;; esac
 [ -e "$CZ_RESIZE_DONE" ] && bad "marked done after a no-op resize" || ok "no marker written"
+
+echo "=== ext4 metadata must not look like an ungrown filesystem ==="
+# The 2026-11-27 regression: the check compared df's usable size against the
+# partition, and ext4 metadata (1.8%, 527 MiB on this card) made it fail on a
+# filesystem that already spanned the partition to within 3584 bytes. The
+# service then reported [failed] on every boot with no marker to stop it.
+mkfixture "$DISK_SECTORS" "$PART_START" "$IMAGER_SIZE" 2
+export CZ_TEST_GROWPART_NOCHANGE=1
+run
+[ "$rc" = 0 ] && ok "exit 0 with the filesystem 3584 bytes short of the partition" \
+    || bad "exit $rc: $out"
+[ -e "$CZ_RESIZE_DONE" ] && ok "wrote the marker, so it will not fail on every boot" \
+    || bad "no marker - the service would fail again next boot"
+# Strip comments before these two: the script explains in prose why df and
+# stat -f are the wrong measurement, so grepping the whole file matches the
+# explanation instead of the code.
+CODE=$(grep -v '^[[:space:]]*#' "$CZ")
+case "$CODE" in *dumpe2fs*) ok "measures with dumpe2fs (the full filesystem length)" ;;
+    *) bad "not using dumpe2fs in the code" ;; esac
+case "$CODE" in *"df -B1"*|*"stat -f"*) bad "still compares df/stat -f sizes, which exclude ext4 metadata" ;;
+    *) ok "no df or stat -f size comparison in the code" ;; esac
+# The tolerance must still be tight enough to catch a real failure.
+export CZ_TEST_FS_BLOCKS=$(( (IMAGER_SIZE * 512 - 4194304) / 4096 ))
+run
+[ "$rc" = 1 ] && ok "4 MiB short is still caught" || bad "exit $rc - the tolerance is too loose"
 
 echo "=== kernel never learns the new size ==="
 mkfixture "$DISK_SECTORS" "$PART_START" "$FRESH_SIZE" 2

@@ -72,10 +72,26 @@ resize2fs "$ROOT_DEV"
 
 # Prove the filesystem actually spans the partition. Without this a no-op
 # resize2fs looks like success, and the marker would then suppress every retry.
+#
+# Measure with dumpe2fs, not df. df and stat -f report DATA blocks and exclude
+# ext4's group descriptors, inode tables and superblock backups - 1.8% of a 28G
+# filesystem, or 527 MiB. A tolerance small enough to catch a no-op resize2fs
+# (2.6G against a 28.6G partition) can never accommodate that, so the previous
+# df-based check reported failure on a resize that had already succeeded and
+# left the marker unwritten, making the service fail again on every boot.
+# dumpe2fs's block count is the filesystem's full length, which is what
+# resize2fs grows and what the partition has to hold: on the device it came to
+# 3584 bytes short of the partition, well inside 1 MiB.
 PART_BYTES=$(( AFTER * 512 ))
-FS_BYTES=$(df -B1 --output=size / | tail -1 | tr -d ' ')
-if [ -z "$FS_BYTES" ] || [ "$FS_BYTES" -lt $(( PART_BYTES - 1048576 )) ]; then
-    echo "cardputerzero-resize: filesystem is ${FS_BYTES:-unknown} bytes but the partition is $PART_BYTES - resize2fs did not grow it" >&2
+FS_BLOCKS=$(dumpe2fs -h "$ROOT_DEV" 2>/dev/null | awk -F: '/^Block count/{gsub(/[ \t]/,"",$2); print $2}')
+FS_BSIZE=$(dumpe2fs -h "$ROOT_DEV" 2>/dev/null | awk -F: '/^Block size/{gsub(/[ \t]/,"",$2); print $2}')
+if [ -z "$FS_BLOCKS" ] || [ -z "$FS_BSIZE" ]; then
+    echo "cardputerzero-resize: could not read the filesystem geometry of $ROOT_DEV via dumpe2fs" >&2
+    exit 1
+fi
+FS_BYTES=$(( FS_BLOCKS * FS_BSIZE ))
+if [ "$FS_BYTES" -lt $(( PART_BYTES - 1048576 )) ]; then
+    echo "cardputerzero-resize: filesystem is $FS_BYTES bytes but the partition is $PART_BYTES - resize2fs did not grow it" >&2
     exit 1
 fi
 
