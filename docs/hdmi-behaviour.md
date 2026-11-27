@@ -59,6 +59,21 @@ broken:
 | `tmds_char_rate` | 65000000 | **138611000** |
 | connector | bound | bound to `crtc=pixelvalve-2` |
 
+Then the cable was plugged in **after** that boot, and the user confirmed a 1080p
+picture. The state at that moment is the conclusive one:
+
+```
+edid   0 bytes          no re-probe occurred, so EDID contributed nothing
+tmds   138611000        the forced CVT-RB mode, not the 148500000 CEA/EDID clock
+fb0    1920,1080 blank=0
+modes  1 x 1920x1080, 6 total   forced mode plus fallbacks, no EDID modes
+HDMI   crtc=pixelvalve-2
+```
+
+A monitor attached after boot, with no EDID whatsoever, displaying 1080p from the
+forced mode — the exact scenario that was broken, with the driving mode identified
+by its clock rather than inferred.
+
 The force-**on** half always worked (`[drm] forcing HDMI-A-1 connector on`); the
 force-**mode** half never did. An earlier reading recorded 1024x768 as "just the
 no-EDID fallback", missing that the fallback was reached *because* the requested
