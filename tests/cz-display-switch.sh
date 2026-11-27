@@ -39,12 +39,16 @@ mk_sysfs() {   # $1 = root; creates panel fb0
     mkdir -p "$r/sys/class/graphics/fb0" "$r/lock"
     echo "320,170"         > "$r/sys/class/graphics/fb0/virtual_size"
     echo "panel-mipi-dbid" > "$r/sys/class/graphics/fb0/name"
+    # Both framebuffers start blanked, as they do on the device after lcd-console
+    # moves tty1 off fb0.
+    echo 4                 > "$r/sys/class/graphics/fb0/blank"
 }
 
 add_hdmi_fb() {  # $1 = root
     mkdir -p "$1/sys/class/graphics/fb1"
     echo "1920,1080" > "$1/sys/class/graphics/fb1/virtual_size"
     echo "vc4drmfb"  > "$1/sys/class/graphics/fb1/name"
+    echo 4           > "$1/sys/class/graphics/fb1/blank"
 }
 
 run() {  # $1 = root
@@ -87,6 +91,33 @@ echo "=== re-run after fbcon drift re-asserts the same mapping ==="
 MAPLOG="$R/maplog" SYSLOG="$R/syslog" CZ_DS_ROOT="$R" CZ_DS_LOCK="$R/lock/l" \
     CZ_DS_SETTLE=0 CZ_DS_STATE="$R/state" bash "$SW"
 [ "$(maps '1 0' "$R")" = 2 ] && ok "second run re-pins tty1 to the panel" || bad "re-run did not re-pin tty1"
+
+echo "=== the HDMI framebuffer is woken, the panel's blank is left alone ==="
+# Verified on hardware 2026-11-27: with the monitor attached after boot the
+# signal was up (HVS channel in use, tmds 65 MHz) but the picture was black, and
+# writing 0 to the HDMI fb's blank attribute brought it up immediately. Nothing
+# else in the image ever does this - cz-splash's FBIOBLANK targets the panel only.
+R="$WORK/wake"; mk_sysfs "$R"; add_hdmi_fb "$R"
+run "$R"
+[ "$(cat "$R/sys/class/graphics/fb1/blank")" = 0 ] && ok "HDMI fb woken (blank=0)" \
+    || bad "HDMI fb still blank=$(cat "$R/sys/class/graphics/fb1/blank") - monitor stays black"
+[ "$(cat "$R/sys/class/graphics/fb0/blank")" = 4 ] && ok "panel's blank untouched" \
+    || bad "panel blank changed to $(cat "$R/sys/class/graphics/fb0/blank")"
+
+echo "=== the wake survives the state cache (reattach with unchanged layout) ==="
+# The state file already matches, so the script short-circuits before its logging
+# block. The wake must happen before that, or a reattach never wakes the output.
+echo 4 > "$R/sys/class/graphics/fb1/blank"
+MAPLOG="$R/maplog" SYSLOG="$R/syslog" CZ_DS_ROOT="$R" CZ_DS_LOCK="$R/lock/l" \
+    CZ_DS_SETTLE=0 CZ_DS_STATE="$R/state" bash "$SW"
+[ "$(cat "$R/sys/class/graphics/fb1/blank")" = 0 ] && ok "woken again despite an unchanged state cache" \
+    || bad "state cache short-circuited the wake - a reattach would stay black"
+
+echo "=== no HDMI framebuffer: nothing to wake ==="
+R="$WORK/nowake"; mk_sysfs "$R"
+run "$R"
+[ "$(cat "$R/sys/class/graphics/fb0/blank")" = 4 ] && ok "panel blank untouched when there is no HDMI fb" \
+    || bad "wrote to the panel's blank with no HDMI present"
 
 echo "=== no panel framebuffer: bail out without touching anything ==="
 R="$WORK/nopanel"; mk_sysfs "$R"; add_hdmi_fb "$R"
