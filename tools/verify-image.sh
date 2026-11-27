@@ -184,8 +184,14 @@ REQUIRED_MODULES=(
 for mod in "${REQUIRED_MODULES[@]}"; do
     if debugfs -R "ls lib/modules" "$TMPDIR/root.ext4" 2>/dev/null | grep -q .; then
         KVER=$(debugfs -R "ls lib/modules" "$TMPDIR/root.ext4" 2>/dev/null | grep -o '[0-9][^ ]*rpi-v8')
-        if debugfs -R "stat lib/modules/${KVER}/extra/${mod}" "$TMPDIR/root.ext4" 2>/dev/null | grep -q "Size:"; then
-            SIZE=$(debugfs -R "stat lib/modules/${KVER}/extra/${mod}" "$TMPDIR/root.ext4" 2>/dev/null | grep "Size:" | awk '{print $2}')
+        # debugfs stat prints TWO lines containing "Size:" - the inode line and a
+        # trailing "Fragment:  Address: 0    Number: 0    Size: 0". Taking field 2
+        # of every match concatenated them into "0\nAddress:", so every module
+        # reported a nonsense size and a 0-byte module looked identical to a
+        # healthy one. Take the field after the first "Size:" token instead.
+        SIZE=$(debugfs -R "stat lib/modules/${KVER}/extra/${mod}" "$TMPDIR/root.ext4" 2>/dev/null \
+            | awk '/Size:/{for(i=1;i<=NF;i++) if($i=="Size:"){print $(i+1); exit}}')
+        if [ -n "$SIZE" ]; then
             pass "$mod ($SIZE bytes)"
         else
             fail "$mod MISSING"
@@ -202,26 +208,14 @@ else
 fi
 
 echo ""
-echo "[4/6] APPLaunch"
+echo "[4/6] APPLaunch (retired desktop stack - absence only)"
 
-if debugfs -R "stat usr/share/APPLaunch/bin/M5CardputerZero-APPLaunch" "$TMPDIR/root.ext4" 2>/dev/null | grep -q "Size:"; then
-    pass "APPLaunch binary installed"
-else
-    fail "APPLaunch binary MISSING"
-fi
-
-if debugfs -R "cat usr/lib/systemd/user/APPLaunch.service" "$TMPDIR/root.ext4" 2>/dev/null | grep -q "ExecStart"; then
-    pass "APPLaunch user service exists"
-else
-    # Try alternative path
-    if debugfs -R "cat lib/systemd/user/APPLaunch.service" "$TMPDIR/root.ext4" 2>/dev/null | grep -q "ExecStart"; then
-        pass "APPLaunch user service exists"
-    else
-        fail "APPLaunch user service MISSING"
-    fi
-fi
-
-# APPLaunch is installed but intentionally not enabled by default.
+# The APPLaunch binary and its user service belonged to the desktop image design
+# in docs/CARDPUTERZERO-IMAGE-DESIGN.md, retired in favour of this console image.
+# No live stage script installs them - only the inert 02-run.sh.orig does - so
+# asserting their presence failed every build, for both the desktop and lite CI
+# variants. The "not enabled" checks below are kept: they still catch an APPLaunch
+# unit being wired into a target if the desktop stack is ever restored.
 if debugfs -R "ls etc/systemd/user/default.target.wants" "$TMPDIR/root.ext4" 2>/dev/null | grep -q "APPLaunch"; then
     fail "APPLaunch user service enabled by default"
 else
@@ -262,25 +256,21 @@ set +e
 debugfs -R "cat var/lib/dpkg/status" "$TMPDIR/root.ext4" > "$TMPDIR/dpkg_status" 2>/dev/null
 echo "  dpkg_status size: $(wc -c < "$TMPDIR/dpkg_status") bytes"
 
-if grep -q "^Package: applaunch$" "$TMPDIR/dpkg_status"; then
-    APPLAUNCH_STATUS=$(sed -n '/^Package: applaunch$/,/^$/p' "$TMPDIR/dpkg_status")
-    VER=$(printf '%s\n' "$APPLAUNCH_STATUS" | awk '$1 == "Version:" { print $2; exit }')
-    pass "applaunch package installed (v$VER)"
-else
-    fail "applaunch package NOT installed"
-fi
-
-if grep -q "^Package: fastfetch$" "$TMPDIR/dpkg_status"; then
-    pass "fastfetch installed"
-else
-    fail "fastfetch NOT installed"
-fi
-
-if grep -q "^Package: cmatrix$" "$TMPDIR/dpkg_status"; then
-    pass "cmatrix installed"
-else
-    fail "cmatrix NOT installed"
-fi
+# applaunch, fastfetch and cmatrix belonged to the retired desktop image and are
+# installed by no live stage script - fastfetch and cmatrix survive only in the
+# inert 00-packages.orig - so asserting them failed every build. Assert instead
+# what this console image really declares, taken from the live 00-packages files
+# and confirmed installed on a 234d54f card.
+REQUIRED_PACKAGES=(i2c-tools evtest cloud-guest-utils cmus ir-keytable iw \
+                   ncurses-term newsboat rpicam-apps-core rpicam-apps-encoder \
+                   tmux v4l-utils fonts-dejavu-core)
+for pkg in "${REQUIRED_PACKAGES[@]}"; do
+    if grep -q "^Package: ${pkg}\$" "$TMPDIR/dpkg_status"; then
+        pass "$pkg installed"
+    else
+        fail "$pkg NOT installed, though a 00-packages file declares it"
+    fi
+done
 set -e
 
 echo ""
