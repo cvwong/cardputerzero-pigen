@@ -6,6 +6,24 @@ unmount_image "${IMG_FILE}"
 
 rm -f "${IMG_FILE}"
 
+# Only the current name is removed above, so every build with a different date or
+# commit left its ~3 GB working copy here forever: five had accumulated by
+# 2026-11-27, about 12 GiB. These are working copies - the images worth keeping
+# are the ones 05-finalise copies into deploy/ - so drop the stale ones.
+#
+# Match on IMG_NAME rather than a bare *.img glob so unrelated files survive, and
+# skip any image still backed by a loop device.
+for old in "${STAGE_WORK_DIR}"/*"${IMG_NAME}"*.img; do
+    [ -e "$old" ] || continue
+    [ "$old" = "$IMG_FILE" ] && continue
+    if losetup -a 2>/dev/null | grep -qF -- "($old)"; then
+        echo "Keeping stale image still attached to a loop device: $(basename "$old")"
+        continue
+    fi
+    echo "Removing stale working image: $(basename "$old")"
+    rm -f -- "$old" "${old%.img}.info" "${old%.img}.bmap" "${old%.img}.sbom"
+done
+
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}"
 
