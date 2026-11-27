@@ -10,6 +10,12 @@ install -d "${ROOTFS_DIR}/etc/cloud"
 touch "${ROOTFS_DIR}/etc/cloud/cloud-init.disabled"
 install -D -m 0644 files/10-cz-issue.conf \
   "${ROOTFS_DIR}/etc/systemd/system/getty@tty1.service.d/10-cz-issue.conf"
+# The monitor console gets its own banner and a cleared screen. Without this it
+# inherits /etc/issue - the panel's 53-column box - and --noclear stacks a copy
+# of it on every getty start.
+install -D -m 0644 files/10-cz-monitor.conf \
+  "${ROOTFS_DIR}/etc/systemd/system/getty@tty2.service.d/10-cz-monitor.conf"
+install -D -m 0644 files/issue.cz-monitor "${ROOTFS_DIR}/etc/issue.cz-monitor"
 # Regenerates /etc/issue as a bordered box before each login prompt. The static
 # files/issue.cz installed below is the fallback, visible only if this fails.
 # There is deliberately no NetworkManager hook to repaint the banner once DHCP
