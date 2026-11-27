@@ -44,9 +44,17 @@ for cmd in "${ROOTFS_DIR}/boot/firmware/cmdline.txt" "${ROOTFS_DIR}/boot/cmdline
     }' "$cmd" > "${cmd}.tmp"
     mv "${cmd}.tmp" "$cmd"
 
+    # MR = CVT timings with reduced blanking, and both flags are load-bearing.
+    # Plain 1920x1080@60 makes the kernel generate CVT timings with htotal 2576
+    # and a 172780 kHz pixel clock, which vc4 refuses outright: "User-defined
+    # mode not supported" (observed on hardware 2026-11-27). Reduced blanking
+    # gives htotal 2080 and 138653 kHz, under the 148500 kHz CEA clock vc4 does
+    # accept from EDID. With no accepted user mode and no EDID, the connector is
+    # left with drm_add_modes_noedid's 1024x768 ceiling, so a monitor attached
+    # after boot never gets 1080p.
     for tok in "console=tty1" "fbcon=map:0" "fbcon=font:${CONSOLE_FONT}" \
                "consoleblank=0" "quiet" "loglevel=2" "logo.nologo" \
-               "cfg80211.ieee80211_regdom=${REGDOMAIN}" "video=HDMI-A-1:1920x1080@60D"; do
+               "cfg80211.ieee80211_regdom=${REGDOMAIN}" "video=HDMI-A-1:1920x1080MR@60D"; do
         grep -qF -- "$tok" "$cmd" || sed -i "s|\$| ${tok}|" "$cmd"
     done
 done

@@ -24,7 +24,7 @@ bad() { printf 'FAIL: %s\n' "$1"; fail=1; }
 
 # Raw pi-gen cmdline for a trixie image, plus tokens the stage must strip.
 INPUT='console=serial0,115200 console=tty1 root=PARTUUID=abcd1234-02 rootfstype=ext4 fsck.repair=yes rootwait resize quiet splash loglevel=1 fbcon=map:1 video=HDMI-A-1:d'
-EXPECT='console=serial0,115200 console=tty1 root=PARTUUID=abcd1234-02 rootfstype=ext4 fsck.repair=yes rootwait fbcon=map:0 fbcon=font:VGA8x8 consoleblank=0 quiet loglevel=2 logo.nologo cfg80211.ieee80211_regdom=US video=HDMI-A-1:1920x1080@60D'
+EXPECT='console=serial0,115200 console=tty1 root=PARTUUID=abcd1234-02 rootfstype=ext4 fsck.repair=yes rootwait fbcon=map:0 fbcon=font:VGA8x8 consoleblank=0 quiet loglevel=2 logo.nologo cfg80211.ieee80211_regdom=US video=HDMI-A-1:1920x1080MR@60D'
 
 mkroot() {
     R="$WORK/$1"
@@ -52,12 +52,30 @@ done
 
 echo "=== the stage's own canonical tokens ==="
 for t in quiet loglevel=2 logo.nologo consoleblank=0 fbcon=map:0 fbcon=font:VGA8x8 \
-         cfg80211.ieee80211_regdom=US video=HDMI-A-1:1920x1080@60D; do
+         cfg80211.ieee80211_regdom=US video=HDMI-A-1:1920x1080MR@60D; do
     has_tok "$t" && ok "has $t" || bad "missing $t"
 done
 for t in splash loglevel=1 fbcon=map:1 video=HDMI-A-1:d; do
     has_tok "$t" && bad "stale $t not dropped" || ok "dropped $t"
 done
+
+echo "=== the HDMI mode must carry CVT reduced-blanking flags ==="
+# Both flags are load-bearing, and dropping either silently reintroduces a mode
+# vc4 refuses. Observed on hardware 2026-11-27 with plain 1920x1080@60:
+#   [drm] User-defined mode not supported: "1920x1080": 60 172780 ... htotal 2576
+# 172780 kHz exceeds what vc4 accepts (it drives the EDID/CEA mode at 148500 kHz).
+# Reduced blanking gives htotal 2080 and 138653 kHz. With no accepted user mode
+# and no EDID the connector is left at drm_add_modes_noedid's 1024x768 ceiling.
+VID=$(for t in $(cmdline); do case "$t" in video=HDMI-A-1:*) echo "$t";; esac; done | head -1)
+MODE=${VID#video=HDMI-A-1:}; MODE=${MODE%%@*}
+case "$MODE" in *M*) ok "M flag present (CVT timings, not GTF)" ;;
+    *) bad "no M flag in '$MODE'" ;; esac
+case "$MODE" in *R*) ok "R flag present (reduced blanking keeps the clock acceptable)" ;;
+    *) bad "no R flag in '$MODE' - plain CVT is 172780 kHz, which vc4 rejects" ;; esac
+case "$VID" in *"1920x1080"*"@60"*) ok "still 1920x1080 at 60 Hz" ;;
+    *) bad "resolution/refresh changed: $VID" ;; esac
+case "$VID" in *D) ok "force-on flag D retained" ;;
+    *) bad "force-on flag D lost: $VID" ;; esac
 
 echo "=== exact resulting line ==="
 if [ "$(cmdline)" = "$EXPECT" ]; then ok "cmdline matches the expected canonical line"; else
