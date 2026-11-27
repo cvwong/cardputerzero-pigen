@@ -101,20 +101,22 @@ else
 fi
 
 
-# Check overlay dtbo
-FOUND_CARDPUTERZERO_DTBO=""
-for overlay in "${CARDPUTERZERO_OVERLAYS[@]}"; do
-    dtbo="$TMPDIR/boot/overlays/${overlay}.dtbo"
+# Check the dtbo for the overlay config.txt actually loads. Scanning
+# CARDPUTERZERO_OVERLAYS for any .dtbo that happens to exist is not enough: an
+# image ships both the v3 and v5 overlays, so an unrelated one satisfies the
+# check while the overlay the firmware loads is missing - which would leave the
+# keypad, LCD and battery gauge dead on an image still reporting ALL PASSED.
+if [ -n "$FOUND_CARDPUTERZERO_OVERLAY" ]; then
+    dtbo="$TMPDIR/boot/overlays/${FOUND_CARDPUTERZERO_OVERLAY}.dtbo"
     if [ -f "$dtbo" ]; then
-        FOUND_CARDPUTERZERO_DTBO="$dtbo"
-        break
+        pass "overlays/${FOUND_CARDPUTERZERO_OVERLAY}.dtbo exists ($(stat -c%s "$dtbo" 2>/dev/null || stat -f%z "$dtbo") bytes)"
+    else
+        fail "config.txt loads ${FOUND_CARDPUTERZERO_OVERLAY} but overlays/${FOUND_CARDPUTERZERO_OVERLAY}.dtbo is MISSING"
     fi
-done
-
-if [ -n "$FOUND_CARDPUTERZERO_DTBO" ]; then
-    pass "overlays/$(basename "$FOUND_CARDPUTERZERO_DTBO") exists ($(stat -c%s "$FOUND_CARDPUTERZERO_DTBO" 2>/dev/null || stat -f%z "$FOUND_CARDPUTERZERO_DTBO") bytes)"
 else
-    fail "CardputerZero overlay dtbo MISSING"
+    # config.txt names no CardputerZero overlay, which already failed above;
+    # there is no name to look up, so do not double-count the same root cause.
+    echo "  - dtbo check skipped: config.txt names no CardputerZero overlay"
 fi
 
 # Check cmdline.txt

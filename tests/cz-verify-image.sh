@@ -115,5 +115,79 @@ grep -q 'if \[ \$ERRORS -eq 0 \]' "$VI" && grep -q 'exit 1' "$VI" \
     && ok "non-zero ERRORS exits 1, so CI sees the failure" \
     || bad "exit status does not depend on ERRORS"
 
+echo "=== the dtbo checked is the one config.txt actually loads ==="
+# Third real defect this guards: the dtbo check scanned CARDPUTERZERO_OVERLAYS
+# for ANY .dtbo that existed and broke at the first hit, independently of the
+# overlay name already resolved from config.txt. An image ships both the v3 and
+# v5 overlays, so a missing v5 - the one the firmware loads, and the one the
+# keypad/LCD/battery depend on - passed verification on the strength of the
+# unrelated v3 file.
+DTBO_BLOCK=$(sed -n '/^# Check the dtbo for the overlay/,/^fi$/p' "$VI")
+if [ -z "$DTBO_BLOCK" ]; then echo "FAIL: could not extract the dtbo block"; exit 1; fi
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+RESULTS="$WORK/results"
+W1="$WORK/both"; W2="$WORK/v3only"; W3="$WORK/v3only-named"
+# Sizes match the real image so a wrong-file report is detectable by size too.
+mk_boot() { # mk_boot <dir> <has-v3:yes|no> <has-v5:yes|no>
+    mkdir -p "$1/boot/overlays"
+    [ "$2" = yes ] && head -c 7208 /dev/zero > "$1/boot/overlays/cardputerzero-v3-overlay.dtbo"
+    [ "$3" = yes ] && head -c 9550 /dev/zero > "$1/boot/overlays/cardputerzero-v5-overlay.dtbo"
+    return 0
+}
+# Run the script's own block with stub pass/fail, as the ERRORS test above does.
+# CARDPUTERZERO_OVERLAYS is extracted from the script too, so a reverted
+# scan-any-dtbo block executes here and is caught on its behaviour rather than
+# merely crashing on an unbound array under set -u.
+run_dtbo() { # run_dtbo <overlay name from config.txt> <tmpdir>
+    : > "$RESULTS"
+    ( TMPDIR="$2"; FOUND_CARDPUTERZERO_OVERLAY="$1"; ERRORS=0
+      eval "$(sed -n '/^CARDPUTERZERO_OVERLAYS=(/,/^)/p' "$VI")"
+      pass() { printf 'PASS %s\n' "$1" >> "$RESULTS"; }
+      fail() { printf 'FAIL %s\n' "$1" >> "$RESULTS"; ERRORS=$((ERRORS+1)); }
+      eval "$DTBO_BLOCK"
+      printf 'ERRORS %s\n' "$ERRORS" >> "$RESULTS" ) >/dev/null 2>&1
+}
+
+# What the real image looks like: config.txt loads v5, both dtbos shipped.
+mk_boot "$W1" yes yes
+run_dtbo "cardputerzero-v5-overlay" "$W1"
+grep -q 'ERRORS 0' "$RESULTS" && ok "v5 loaded and v5 present passes" \
+    || bad "healthy v5 image reported an error: $(tr '\n' ';' < "$RESULTS")"
+grep -qF 'cardputerzero-v5-overlay.dtbo exists (9550 bytes)' "$RESULTS" \
+    && ok "reports the v5 dtbo that is loaded, not the unrelated v3" \
+    || bad "did not report the loaded v5 dtbo: $(tr '\n' ';' < "$RESULTS")"
+
+# The defect itself: config.txt loads v5, only v3 shipped.
+mk_boot "$W2" yes no
+run_dtbo "cardputerzero-v5-overlay" "$W2"
+grep -q 'ERRORS 1' "$RESULTS" \
+    && ok "v5 loaded but v5 MISSING fails (the old any-dtbo scan passed here)" \
+    || bad "a missing loaded overlay did not fail: $(tr '\n' ';' < "$RESULTS")"
+grep -qF 'config.txt loads cardputerzero-v5-overlay but' "$RESULTS" \
+    && ok "the failure names the overlay config.txt loads" \
+    || bad "failure does not name the loaded overlay: $(tr '\n' ';' < "$RESULTS")"
+grep -qF 'cardputerzero-v3-overlay.dtbo exists' "$RESULTS" \
+    && bad "still credits the unrelated v3 dtbo as satisfying the check" \
+    || ok "the unrelated v3 dtbo no longer satisfies the check"
+
+# The v3 board must still verify when v3 is what config.txt loads.
+mk_boot "$W3" yes no
+run_dtbo "cardputerzero-v3-overlay" "$W3"
+grep -q 'ERRORS 0' "$RESULTS" && ok "v3 loaded and v3 present still passes" \
+    || bad "a healthy v3 image now fails: $(tr '\n' ';' < "$RESULTS")"
+
+# No overlay named in config.txt already fails upstream; this block must not
+# double-count the same root cause.
+run_dtbo "" "$W1"
+grep -q 'ERRORS 0' "$RESULTS" \
+    && ok "an unnamed overlay adds no second failure for the same cause" \
+    || bad "unnamed overlay double-counted: $(tr '\n' ';' < "$RESULTS")"
+
+# The old independent scan must not come back.
+grep -q 'FOUND_CARDPUTERZERO_DTBO' "$VI" \
+    && bad "the old scan-any-dtbo variable is back in verify-image.sh" \
+    || ok "the old scan-any-dtbo loop is gone"
+
 echo
 if [ "$fail" = 0 ]; then echo "CZ-VERIFY-IMAGE OK"; else echo "CZ-VERIFY-IMAGE PROBLEM"; exit 1; fi
