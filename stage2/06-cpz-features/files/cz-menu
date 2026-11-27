@@ -175,18 +175,18 @@ while :; do
     echo ' 1 Camera      5 IR'
     echo ' 2 Music       6 System'
     echo ' 3 News        7 CLI'
-    echo ' 4 WiFi        8 Recorder'
+    echo ' 4 Recorder    8 WiFi'
     echo ' 9 Files       0 Logout'
     read -r -n1 -s k
     case "$k" in
       1) need camera_app && cz-camera ;;
       2) need cmus && cmus ;;
       3) need newsboat && cz-news ;;
-      4) m_net ;;
+      4) need cz-record && cz-record ;;
       5) m_ir ;;
       6) m_system ;;
       7) clear; tmux -f /etc/cz-tmux.conf new-session -A -s main ;;
-      8) need cz-record && cz-record ;;
+      8) m_net ;;
       9) need cz-files && cz-files ;;
       0) do_logout ;;
     esac

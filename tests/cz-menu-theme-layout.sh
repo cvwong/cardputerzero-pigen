@@ -120,6 +120,28 @@ for key in $dispatched; do
 done
 echo "main screen keys match the case dispatch: $([ $bind = 0 ] && echo OK || echo FAIL)"
 echo "  rendered=[$(echo $rendered | tr -s ' ')] dispatched=[$(echo $dispatched | tr -s ' ')]"
+# The set comparison above cannot catch a half-swap: moving a label to another
+# key without moving its action leaves both digit sets identical while the menu
+# lies about what each key does. Verified blind - reverting only key 4's action
+# after the WiFi/Recorder swap still reported LAYOUT OK. So pair each rendered
+# label with a marker that must appear in the command its key dispatches.
+declare -A EXPECT=( [Camera]=cz-camera [Music]=cmus [News]=cz-news
+                    [Recorder]=cz-record [IR]=m_ir [System]=m_system
+                    [CLI]=tmux [WiFi]=m_net [Files]=cz-files [Logout]=do_logout )
+CASELINES=$(grep -E '^      [0-9]\)' "$SRC" | sed 's/^      //')
+pair=0
+while read -r key label; do
+    [ -n "$key" ] || continue
+    if [ -z "${EXPECT[$label]:-}" ]; then
+        echo "  !! no expectation recorded for label '$label' on key $key"; pair=1; continue
+    fi
+    cmd=$(printf '%s\n' "$CASELINES" | awk -v k="$key" 'BEGIN{FS=") "} $1==k {print $2}')
+    case "$cmd" in
+      *"${EXPECT[$label]}"*) ;;
+      *) echo "  !! key $key shows '$label' but dispatches: ${cmd:-<nothing>}"; pair=1 ;;
+    esac
+done < <(printf '%s\n' "$main_s" | grep -v 'Battery:' | grep -oE '[0-9] [A-Z][A-Za-z]*' | sort -u)
+echo "each key's label matches the action it dispatches: $([ $pair = 0 ] && echo OK || echo FAIL)"
 # ask must confirm only on y/Y; anything else (incl. Enter) is No.
 printf 'y'  | ask "Q?" >/dev/null; r1=$?
 printf 'Y'  | ask "Q?" >/dev/null; r2=$?
@@ -128,4 +150,4 @@ printf '\n' | ask "Q?" >/dev/null; r4=$?
 beh=0; [ "$r1" = 0 ] && [ "$r2" = 0 ] && [ "$r3" = 1 ] && [ "$r4" = 1 ] || beh=1
 echo "ask accepts y/Y only (y=$r1 Y=$r2 n=$r3 enter=$r4): $([ $beh = 0 ] && echo OK || echo FAIL)"
 echo
-if [ "$a" = 0 ] && [ "$b" = 0 ] && [ "$s" = 0 ] && [ "$d" = 0 ] && [ "$c" = 0 ] && [ "$beh" = 0 ] && [ "$st" = 0 ] && [ "$bind" = 0 ] && [ "$sig" = 0 ]; then echo "LAYOUT OK"; else echo "LAYOUT PROBLEM"; exit 1; fi
+if [ "$a" = 0 ] && [ "$b" = 0 ] && [ "$s" = 0 ] && [ "$d" = 0 ] && [ "$c" = 0 ] && [ "$beh" = 0 ] && [ "$st" = 0 ] && [ "$bind" = 0 ] && [ "$sig" = 0 ] && [ "$pair" = 0 ]; then echo "LAYOUT OK"; else echo "LAYOUT PROBLEM"; exit 1; fi

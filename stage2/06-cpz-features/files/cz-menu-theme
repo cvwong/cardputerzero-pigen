@@ -182,7 +182,7 @@ main_screen() {
     row2 1 "Camera" 5 "IR"
     row2 2 "Music"  6 "System"
     row2 3 "News"   7 "CLI"
-    row2 4 "WiFi"   8 "Recorder"
+    row2 4 "Recorder" 8 "WiFi"
     row2 9 "Files"  0 "Logout"
     bsep
     brow "  press a number to select" "${DIM}  press a number to select${R}"
@@ -196,11 +196,11 @@ while :; do
       1) if cz-camera-present; then need camera_app && cz-camera; else echo "No camera detected"; sleep 2; fi ;;
       2) need cmus && cmus ;;
       3) need newsboat && cz-news ;;
-      4) m_net ;;
+      4) need cz-record && cz-record ;;
       5) m_ir ;;
       6) m_system ;;
       7) clear; tmux -f /etc/cz-tmux.conf new-session -A -s main ;;
-      8) need cz-record && cz-record ;;
+      8) m_net ;;
       9) need cz-files && cz-files ;;
       0) do_logout ;;
     esac
