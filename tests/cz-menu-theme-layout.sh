@@ -9,9 +9,23 @@ SRC="$HERE/../stage2/06-cpz-features/files/cz-menu-theme"
 # cz-menu-theme sources the shared theme lib from /usr/local/lib, which does not
 # exist on a dev machine, so point it at the copy in the source tree.
 export CZ_THEME="$HERE/../stage2/06-cpz-features/files/cz-theme.sh"
+export CZ_SIGNAL="$HERE/../stage2/06-cpz-features/files/cz-signal.sh"
 [ -r "$CZ_THEME" ] || { echo "missing $CZ_THEME"; exit 1; }
+[ -r "$CZ_SIGNAL" ] || { echo "missing $CZ_SIGNAL"; exit 1; }
 FUNCS="$(mktemp)"
-trap 'rm -f "$FUNCS"' EXIT
+WIRELESS="$(mktemp)"
+WIRELESS_NONE="$(mktemp)"
+trap 'rm -f "$FUNCS" "$WIRELESS" "$WIRELESS_NONE"' EXIT
+# The header bars are read from /proc/net/wireless, which on a dev machine
+# reports the host's own WiFi, so pin the source: -48 dBm is 4 bars, and a file
+# with only its two header lines means "no interface is associated".
+# cz-signal-bars.sh covers the rest of the mapping.
+printf '%s\n' \
+  'Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE' \
+  ' face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22' \
+  ' wlan1: 0000   62.  -48.  -256        0      0      0      0      7        0' > "$WIRELESS"
+head -2 "$WIRELESS" > "$WIRELESS_NONE"
+export CZ_WIRELESS="$WIRELESS"
 # Load only the function/theme definitions, not the interactive main loop.
 n=$(grep -n '^while :; do' "$SRC" | tail -1 | cut -d: -f1)
 head -n $((n-1)) "$SRC" > "$FUNCS"
@@ -64,6 +78,30 @@ case "$sys_s" in *"BL:"*"Temp:"*) ;; *) st=1 ;; esac
 case "$disp_s" in *"BL:"*) ;; *) st=1 ;; esac
 [[ "$main_s" =~ Time:\ [0-9][0-9]:[0-9][0-9](am|pm) ]] || { st=1; echo "  !! main Time not in am/pm"; }
 echo "status fields (main=Battery/Date/Time, audio=Vol, system=BL/Temp, display=BL): $([ $st = 0 ] && echo OK || echo FAIL)"
+# Header signal bars: title flush left, bars flush right in a fixed 4-column
+# field, and the title in the same column whether or not wifi is up, so the
+# heading cannot shift sideways when the radio connects or drops.
+sig=0
+title_col() { printf '%s' "${1%%CARDPUTER ZERO*}"; }
+tl=$(printf '%s\n' "$main_s" | sed -n 2p)
+case "$tl" in '║ CARDPUTER ZERO '*) ;; *) sig=1; echo "  !! title not flush left: [$tl]" ;; esac
+case "$tl" in *'|||| ║') ;; *) sig=1; echo "  !! bars not flush right: [$tl]" ;; esac
+# hdr_lite has no status line but shares the same title row.
+tl_lite=$(hdr_lite "RECORDINGS" | strip | sed -n 2p)
+case "$tl_lite" in '║ RECORDINGS '*'|||| ║') ;; *) sig=1; echo "  !! hdr_lite title row wrong: [$tl_lite]" ;; esac
+# No associated interface: the field goes blank, the title stays put.
+CZ_WIRELESS="$WIRELESS_NONE"
+tl_none=$(render_main | strip | sed -n 2p)
+CZ_WIRELESS="$WIRELESS"
+case "$tl_none" in *'|'*) sig=1; echo "  !! bars shown with no wifi: [$tl_none]" ;; esac
+[ "$(title_col "$tl")" = "$(title_col "$tl_none")" ] \
+    || { sig=1; echo "  !! title moved when wifi dropped"; }
+[ "${#tl_none}" -eq 53 ] || { sig=1; echo "  !! no-wifi title row is ${#tl_none} wide, want 53"; }
+# CONFIRM is a modal question, not a menu page: still centred, still no bars.
+tl_ask=$(render_ask | strip | sed -n 2p)
+case "$tl_ask" in *'|'*) sig=1; echo "  !! CONFIRM dialog grew bars: [$tl_ask]" ;; esac
+case "$tl_ask" in '║ CONFIRM'*) sig=1; echo "  !! CONFIRM title lost its centring: [$tl_ask]" ;; esac
+echo "header signal bars (left title, right 4-col field, stable with no wifi): $([ $sig = 0 ] && echo OK || echo FAIL)"
 # Every key the main screen advertises must have a matching case branch in the
 # real script, and every case branch must be advertised. This is what catches a
 # menu edit that updated the labels but forgot the dispatch, or the reverse.
@@ -90,4 +128,4 @@ printf '\n' | ask "Q?" >/dev/null; r4=$?
 beh=0; [ "$r1" = 0 ] && [ "$r2" = 0 ] && [ "$r3" = 1 ] && [ "$r4" = 1 ] || beh=1
 echo "ask accepts y/Y only (y=$r1 Y=$r2 n=$r3 enter=$r4): $([ $beh = 0 ] && echo OK || echo FAIL)"
 echo
-if [ "$a" = 0 ] && [ "$b" = 0 ] && [ "$s" = 0 ] && [ "$d" = 0 ] && [ "$c" = 0 ] && [ "$beh" = 0 ] && [ "$st" = 0 ] && [ "$bind" = 0 ]; then echo "LAYOUT OK"; else echo "LAYOUT PROBLEM"; exit 1; fi
+if [ "$a" = 0 ] && [ "$b" = 0 ] && [ "$s" = 0 ] && [ "$d" = 0 ] && [ "$c" = 0 ] && [ "$beh" = 0 ] && [ "$st" = 0 ] && [ "$bind" = 0 ] && [ "$sig" = 0 ]; then echo "LAYOUT OK"; else echo "LAYOUT PROBLEM"; exit 1; fi

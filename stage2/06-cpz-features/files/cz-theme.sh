@@ -11,6 +11,14 @@
 BL="${CZ_BACKLIGHT:-/sys/class/backlight/backlight}"
 CARD="${CZ_AUDIO_CARD:-ES8389Audio}"
 
+# Signal bars come from cz-signal.sh, which cz-wifi also sources, so the menu
+# headers and `cz-wifi signal` cannot drift onto different scales. Resolved
+# relative to this file: installed they both live in /usr/local/lib, and in the
+# source tree they sit side by side.
+CZ_SIGNAL="${CZ_SIGNAL:-$(dirname "${BASH_SOURCE[0]}")/cz-signal.sh}"
+[ -r "$CZ_SIGNAL" ] || { echo "cz-theme.sh: cannot read $CZ_SIGNAL" >&2; return 1; }
+. "$CZ_SIGNAL"
+
 # ---------------- THEME (fbcon-safe 16-color ANSI) ----------------
 R=$'\e[0m'            # reset
 BORDER=$'\e[34m'      # box border ......... blue
@@ -47,6 +55,28 @@ title_row() {
     brow "$(sp "$l")$t$(sp "$r")" "$(sp "$l")$TITLE$t$R$(sp "$r")"
 }
 
+# Colour for the bars, following batcol's lead: the reading decides the colour.
+sigcol() {
+    case "$(sig_bars)" in
+      '')            printf '%s' "$DIM" ;;
+      '||||'|'|||.') printf '%s' "$OK" ;;
+      '||..')        printf '%s' "$WARN" ;;
+      *)             printf '%s' "$BAD" ;;
+    esac
+}
+
+# title_row_sig <title> — menu-page header row: title on the left, signal bars
+# on the right. The bars field is a fixed 4 columns (4 spaces when there is no
+# link) so the title keeps its position whether or not wifi is up.
+title_row_sig() {
+    local t="$1" bars cfield fill
+    bars=$(sig_bars)
+    if [ -n "$bars" ]; then cfield="$(sigcol)$bars$R"; else cfield='    '; fi
+    fill=$(( 51 - 1 - ${#t} - 4 - 1 )); (( fill < 1 )) && fill=1
+    brow "$(sp 1)$t$(sp "$fill")${bars:-    }$(sp 1)" \
+         "$(sp 1)$TITLE$t$R$(sp "$fill")$cfield$(sp 1)"
+}
+
 have()  { command -v "$1" >/dev/null 2>&1; }
 pause() { printf '\npress any key'; read -r -n1 -s _; }
 
@@ -77,13 +107,13 @@ temp() { if have vcgencmd; then
              vcgencmd measure_temp 2>/dev/null | sed -e "s/^temp=//" -e "s/'C\$/°C/"
          else awk '{printf "%.1f°C", $1/1000}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null; fi; }
 
-# Boxed header: top border, centered title, context status line, separator.
-# hdr <title> [mode]  mode: main=Battery/Date/Time, audio=Battery/Vol/Time,
-# system=Battery/BL/Temp.
+# Boxed header: top border, title with signal bars, context status line,
+# separator. hdr <title> [mode]  mode: main=Battery/Date/Time,
+# audio=Battery/Vol/Time, system=Battery/BL/Temp.
 hdr() {
     clear
     btop
-    title_row "$1"
+    title_row_sig "$1"
     local mode="${2:-main}" bv tv dv midp midc tp tc
     bv=$(bat); tv=$(date +%I:%M%P); dv=$(date +%Y-%m-%d)
     case "$mode" in
@@ -106,7 +136,7 @@ hdr() {
 hdr_lite() {
     clear
     btop
-    title_row "$1"
+    title_row_sig "$1"
     bsep
 }
 

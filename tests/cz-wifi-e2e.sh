@@ -13,6 +13,17 @@ mkdir -p "$MOCK"
 export CZ_TEST_CALLS="$WORK/nmcli-calls.log"
 : > "$CZ_TEST_CALLS"
 
+# Bars come from /proc/net/wireless via cz-signal.sh, so pin both: without this
+# the assertion would read the build host's own WiFi. -59 dBm agrees with the
+# 82% nmcli reports below (nmcli SIGNAL% is roughly 2*(dBm+100)).
+cat > "$WORK/wireless" <<'EOF'
+Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE
+ face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22
+ wlan0: 0000   51.  -59.  -256        0      0      0      0      6        0
+EOF
+export CZ_WIRELESS="$WORK/wireless"
+export CZ_SIGNAL="$HERE/../stage2/06-cpz-features/files/cz-signal.sh"
+
 cat > "$MOCK/nmcli" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$CZ_TEST_CALLS"
@@ -54,7 +65,7 @@ eq "signal decodes escaped-colon SSID" "SSID   Cafe:Guest" "$(echo "$out" | sed 
 eq "signal not shifted (signal)" "Signal 82%" "$(echo "$out" | sed -n 2p)"
 eq "signal not shifted (rate)"   "Rate   270 Mbit/s" "$(echo "$out" | sed -n 3p)"
 eq "signal not shifted (chan)"   "Chan   6" "$(echo "$out" | sed -n 4p)"
-eq "signal bars for 82%"         "Bars   #####" "$(echo "$out" | sed -n 5p)"
+eq "signal bars use the shared 4-bar scale" "Bars   |||." "$(echo "$out" | sed -n 5p)"
 
 echo "=== cz-wifi scan (pick 1 = Cafe:Guest) ==="
 out=$(printf '1\nsecretpw\n' | bash "$CZ" scan wlan0); echo "$out"

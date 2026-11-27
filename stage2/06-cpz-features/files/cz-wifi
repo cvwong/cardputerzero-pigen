@@ -1,5 +1,15 @@
 #!/bin/bash
 # cz-wifi — compact WiFi control for a 53-column console
+#
+# The Bars line comes from cz-signal.sh, the same helper cz-theme.sh sources
+# for the bars in every menu header, so the two cannot drift onto different
+# scales. Installed it lives in /usr/local/lib; in the source tree it sits next
+# to this file, which is what the tests rely on.
+CZ_SIGNAL="${CZ_SIGNAL:-/usr/local/lib/cz-signal.sh}"
+[ -r "$CZ_SIGNAL" ] || CZ_SIGNAL="$(dirname "${BASH_SOURCE[0]}")/cz-signal.sh"
+[ -r "$CZ_SIGNAL" ] || { echo "cz-wifi: cannot read cz-signal.sh" >&2; exit 1; }
+. "$CZ_SIGNAL"
+
 IFACE=$(nmcli -t -f DEVICE,TYPE device 2>/dev/null | awk -F: '$2=="wifi"{print $1; exit}')
 
 need() { [ -n "$IFACE" ] || { echo "no wifi device found"; exit 1; }; }
@@ -195,12 +205,10 @@ signal() {
     fi
     nm_fields "$cur"
     local ssid="${NM_F[1]}" sig="${NM_F[2]}" rate="${NM_F[3]}" chan="${NM_F[4]}"
-    printf 'SSID   %s\nSignal %s%%\nRate   %s\nChan   %s\nBars   ' "$ssid" "$sig" "$rate" "$chan"
-    local bars=$(( (sig + 19) / 20 )) i
-    for i in 1 2 3 4 5; do
-        if [ "$i" -le "$bars" ]; then printf '#'; else printf '.'; fi
-    done
-    echo
+    # Bars are read live from /proc/net/wireless while Signal above is nmcli's
+    # cached scan percentage, so the two can disagree by a few dB.
+    printf 'SSID   %s\nSignal %s%%\nRate   %s\nChan   %s\nBars   %s\n' \
+           "$ssid" "$sig" "$rate" "$chan" "$(sig_bars)"
     ip -brief addr show "$IFACE" 2>/dev/null
 }
 
