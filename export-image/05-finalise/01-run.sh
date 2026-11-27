@@ -145,3 +145,58 @@ if [ -f "${BMAP_FILE}" ]; then
 	cp "$BMAP_FILE" "$DEPLOY_DIR/"
 fi
 cp "$INFO_FILE" "$DEPLOY_DIR/"
+
+# --- deploy/ retention ---
+# Nothing ever removed a deployed image, so every build added another ~3.3 GB
+# set and four had accumulated by 2026-11-28. Keep the newest DEPLOY_KEEP sets,
+# counting the one just written above as a keeper, so the directory settles at
+# DEPLOY_KEEP sets rather than DEPLOY_KEEP plus one. Set DEPLOY_KEEP=0 to turn
+# retention off.
+#
+# Ranked by mtime rather than by parsing IMG_DATE or the commit-hash suffix, so
+# a filename change cannot upset the order. Scoped to IMG_NAME exactly as the
+# working-copy prune in prerun.sh is, so unrelated files are never candidates.
+# Artifacts are grouped into sets by stem so one build's .img/.bmap/.info/.sbom
+# go together; a leading "image_" is normalised away because that is the prefix
+# ARCHIVE_FILENAME adds when DEPLOY_COMPRESSION is not "none".
+DEPLOY_KEEP="${DEPLOY_KEEP:-3}"
+if [ "$DEPLOY_KEEP" -gt 0 ] 2>/dev/null; then
+	declare -A DEPLOY_SET_MTIME=()
+	for artifact in "${DEPLOY_DIR}"/*"${IMG_NAME}"*; do
+		[ -e "$artifact" ] || continue
+		base="$(basename "$artifact")"
+		case "$base" in
+		*.img.gz | *.img.xz) stem="${base%.img.*}" ;;
+		*.sbom.xz) stem="${base%.sbom.xz}" ;;
+		*.img | *.bmap | *.info | *.sbom | *.zip) stem="${base%.*}" ;;
+		*) continue ;;
+		esac
+		stem="${stem#image_}"
+		mtime="$(stat -c %Y "$artifact" 2>/dev/null)" || continue
+		if [ -z "${DEPLOY_SET_MTIME[$stem]:-}" ] || [ "$mtime" -gt "${DEPLOY_SET_MTIME[$stem]}" ]; then
+			DEPLOY_SET_MTIME[$stem]="$mtime"
+		fi
+	done
+
+	if [ "${#DEPLOY_SET_MTIME[@]}" -gt "$DEPLOY_KEEP" ]; then
+		# Sort newest first, drop the DEPLOY_KEEP keepers, remove the rest.
+		while IFS= read -r stale; do
+			[ -n "$stale" ] || continue
+			if losetup -a 2>/dev/null | grep -qF -- "${DEPLOY_DIR}/${stale}"; then
+				echo "Keeping deployed image still attached to a loop device: ${stale}"
+				continue
+			fi
+			echo "Removing old deployed image: ${stale}"
+			rm -f -- "${DEPLOY_DIR}/${stale}.img" \
+				"${DEPLOY_DIR}/${stale}.bmap" \
+				"${DEPLOY_DIR}/${stale}.info" \
+				"${DEPLOY_DIR}/${stale}.sbom" \
+				"${DEPLOY_DIR}/${stale}.sbom.xz" \
+				"${DEPLOY_DIR}/image_${stale}.img.gz" \
+				"${DEPLOY_DIR}/image_${stale}.img.xz" \
+				"${DEPLOY_DIR}/image_${stale}.zip"
+		done < <(for stem in "${!DEPLOY_SET_MTIME[@]}"; do
+			printf '%s\t%s\n' "${DEPLOY_SET_MTIME[$stem]}" "$stem"
+		done | sort -rn | tail -n +"$((DEPLOY_KEEP + 1))" | cut -f2-)
+	fi
+fi
