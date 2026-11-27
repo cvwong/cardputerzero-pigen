@@ -40,7 +40,12 @@ mount -o loop,ro "$TMPDIR/boot.fat" "$TMPDIR/boot" 2>/dev/null
 echo ""
 echo "[2/6] Boot partition (FAT32)"
 
-for firmware_file in start.elf splash.bmp; do
+# splash.bmp used to be asserted here but no stage installs it and no package
+# ships one - it was only referenced by the inert 02-run.sh.orig - so the check
+# failed on every image this repo builds, including every one CI verified. This
+# is a console image: 02-run.sh sets gpu_mem=32 and strips splash_screen= from
+# config.txt, so there is deliberately no boot splash to assert on.
+for firmware_file in start.elf; do
     if [ -s "$TMPDIR/boot/$firmware_file" ]; then
         pass "$firmware_file exists ($(stat -c%s "$TMPDIR/boot/$firmware_file" 2>/dev/null || stat -f%z "$TMPDIR/boot/$firmware_file") bytes)"
     else
