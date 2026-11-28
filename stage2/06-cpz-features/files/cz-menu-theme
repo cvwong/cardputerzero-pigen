@@ -48,33 +48,78 @@ standby_screen() {
 # it arrives as an empty string, indistinguishable from ENTER, which would make
 # a bare ENTER resume. Measured, not assumed.
 do_standby() {
-    local k
+    local k secs rc
+    secs=$(cz_standby_seconds)
     cz_standby_blank
-    # Any key wakes the panel. On a tty this blocks until then; the || guards
-    # keep a closed stdin from spinning, since read returns empty on EOF and an
-    # empty string is neither TAB nor a wake key.
-    IFS= read -r -n1 -s k || { cz_standby_wake; return 0; }
-    cz_standby_wake
-    standby_screen
     while :; do
-        IFS= read -r -n1 -s k || return 0
-        [ "$k" = "$TAB" ] || continue
-        IFS= read -r -n1 -s k || return 0
-        [ -z "$k" ] && return 0    # TAB then ENTER resumes
+        # Any key wakes the panel. This read is deliberately untimed: the panel
+        # is already blank here, so there is nothing to save by timing out. On a
+        # tty it blocks until a key arrives; the || guard keeps a closed stdin
+        # from spinning, since read returns empty on EOF and an empty string is
+        # neither TAB nor a wake key.
+        IFS= read -r -n1 -s k || { cz_standby_wake; return 0; }
+        cz_standby_wake
+        standby_screen
+        # The notice is itself an idle surface. Waking it and then walking away
+        # without resuming must re-blank rather than hold the backlight on
+        # forever, so it gets the same timeout as the menu - one setting governs
+        # both. A TAB with no ENTER before the timeout also re-blanks, and the
+        # pair must then be entered afresh after the next wake.
+        while :; do
+            if [ "$secs" -gt 0 ]; then IFS= read -t "$secs" -r -n1 -s k; rc=$?
+            else IFS= read -r -n1 -s k; rc=$?; fi
+            if [ "$rc" -gt 128 ]; then cz_standby_blank; break; fi
+            # EOF, not a timeout. The panel is already awake here, so there is
+            # nothing to restore - unlike the outer read, which waits while the
+            # panel is blanked and must not leave it dark.
+            [ "$rc" -eq 0 ] || return 0
+            [ "$k" = "$TAB" ] || continue
+            if [ "$secs" -gt 0 ]; then IFS= read -t "$secs" -r -n1 -s k; rc=$?
+            else IFS= read -r -n1 -s k; rc=$?; fi
+            if [ "$rc" -gt 128 ]; then cz_standby_blank; break; fi
+            [ "$rc" -eq 0 ] || return 0
+            [ -z "$k" ] && return 0    # TAB then ENTER resumes
+        done
     done
 }
 
 # Screen-timeout picker. The current setting is marked in place; writing goes
 # through cz_standby_set_minutes, which rejects anything not on the list.
+#
+# This deliberately does NOT use the shared menu() helper. menu() builds its
+# label array once and redraws that same array on every keypress, so the
+# "(current)" marker would stay on the old value until the user left and
+# re-entered the screen. Here the labels are rebuilt from cz_standby_minutes
+# inside the loop, so the marker moves the instant a new value is selected.
 m_timeout() {
-    local cur m label
-    cur=$(cz_standby_minutes)
-    local -a args=()
-    for m in $CZ_STANDBY_CHOICES; do
-        if [ "$m" = "$cur" ]; then label="$m min  (current)"; else label="$m min"; fi
-        args+=("$label" "!cz_standby_set_minutes $m")
+    local cur m label i idx pick k secs rc
+    while :; do
+        cur=$(cz_standby_minutes)
+        hdr "SCREEN TIMEOUT" system
+        i=1
+        for m in $CZ_STANDBY_CHOICES; do
+            if [ "$m" = "$cur" ]; then label="$m min  (current)"; else label="$m min"; fi
+            row1 "$i" "$label"
+            i=$((i + 1))
+        done
+        row1 0 "Back"
+        bbot
+        secs=$(cz_standby_seconds)
+        if [ "$secs" -gt 0 ]; then IFS= read -t "$secs" -r -n1 -s k; rc=$?
+        else IFS= read -r -n1 -s k; rc=$?; fi
+        if [ "$rc" -gt 128 ]; then do_standby; STANDBY_TO_MAIN=1; return; fi
+        [ "$k" = 0 ] && return
+        if [[ "$k" =~ ^[1-9]$ ]]; then
+            # Map the row number back onto the choice list rather than assuming
+            # the keys are the minute values themselves.
+            idx=0; pick=""
+            for m in $CZ_STANDBY_CHOICES; do
+                idx=$((idx + 1))
+                if [ "$idx" = "$k" ]; then pick="$m"; break; fi
+            done
+            [ -n "$pick" ] && cz_standby_set_minutes "$pick"
+        fi
     done
-    menu "SCREEN TIMEOUT" system "${args[@]}"
 }
 
 m_hostname() {

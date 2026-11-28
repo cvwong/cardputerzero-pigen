@@ -116,8 +116,10 @@ head -n $((n-1)) "$MT" > "$WORK/fn.sh"
 
 # Harness: stub the hardware and the screen, shadow `read` to count calls.
 READLOG="$WORK/reads"
-gate() { # gate <keystrokes> -> prints "<rc> <reads> <blanks> <wakes> <screens>"
-    printf '%s' "$1" | bash -c '
+gate() { # gate <escape-sequence> -> prints "<rc> <reads> <blanks> <wakes> <screens>"
+    # %b, and the caller passes the escapes unevaluated: $(printf 'x\\t\\n')
+    # would strip the trailing newline and the case would end on EOF instead.
+    printf '%b' "$1" | bash -c '
         READLOG="'"$READLOG"'"; CALLS="'"$WORK/calls"'"
         : > "$READLOG"; : > "$CALLS"
         read() { printf x >> "$READLOG"; builtin read "$@"; }
@@ -136,15 +138,76 @@ gate() { # gate <keystrokes> -> prints "<rc> <reads> <blanks> <wakes> <screens>"
     '
 }
 # x wakes, TAB then ENTER resumes: 3 reads.
-r=$(gate "$(printf 'x\t\n')"); eq "x,TAB,ENTER resumes" "0 3 1 1 1" "$r"
+r=$(gate 'x\t\n'); eq "x,TAB,ENTER resumes" "0 3 1 1 1" "$r"
 # x wakes, ENTER alone must be ignored, then TAB+ENTER resumes: 4 reads.
 # If ENTER resumed, this would be 2 reads - the exit code alone cannot tell.
-r=$(gate "$(printf 'x\n\t\n')"); eq "ENTER alone does not resume (4 reads, not 2)" "0 4 1 1 1" "$r"
+r=$(gate 'x\n\t\n'); eq "ENTER alone does not resume (4 reads, not 2)" "0 4 1 1 1" "$r"
 # x wakes, TAB then a non-ENTER key must not resume either: 5 reads.
-r=$(gate "$(printf 'x\tq\t\n')"); eq "TAB then a non-ENTER key does not resume" "0 5 1 1 1" "$r"
+r=$(gate 'x\tq\t\n'); eq "TAB then a non-ENTER key does not resume" "0 5 1 1 1" "$r"
 # The panel is blanked exactly once and woken exactly once per standby.
-r=$(gate "$(printf 'x\t\n')")
+r=$(gate 'x\t\n')
 eq "one blank, one wake, one notice per standby" "0 3 1 1 1" "$r"
+
+echo
+echo "=== the STAND BY notice re-blanks if the user walks away again ==="
+# Regression for a bug found on hardware 2026-11-28: the notice waited on a
+# blocking read, so waking it and then pressing nothing held the backlight on
+# forever. Uses a real 1-second timeout and delayed keystrokes rather than a
+# structural assertion, so it reproduces the reported sequence:
+#   idle -> blank -> press a key -> notice -> press nothing -> must re-blank.
+# With the bug this yields "0 1 1 1"; fixed it yields "0 2 2 2". Costs ~2.5 s.
+CALLS2="$WORK/calls2"
+gate_slow() {
+    { printf 'x'; sleep 2.5; printf '\t\n'; } | bash -c '
+        CALLS="'"$CALLS2"'"; : > "$CALLS"
+        TAB=$(printf "\t")
+        source "'"$WORK/fn.sh"'" 2>/dev/null
+        cz_standby_blank()   { printf blank  >> "$CALLS"; }
+        cz_standby_wake()    { printf wake   >> "$CALLS"; }
+        standby_screen()     { printf screen >> "$CALLS"; }
+        cz_standby_seconds() { printf 1; }
+        do_standby; rc=$?
+        printf "%s %s %s %s\n" "$rc" "$(grep -o blank "$CALLS" | wc -l)" \
+            "$(grep -o wake "$CALLS" | wc -l)" "$(grep -o screen "$CALLS" | wc -l)"
+    '
+}
+r=$(gate_slow)
+eq "idle at the notice re-blanks, and TAB+ENTER still resumes afterwards" "0 2 2 2" "$r"
+
+echo
+echo "=== the (current) marker moves the moment a value is selected ==="
+# Reported from hardware 2026-11-28: the marker stayed on the old value until
+# the user left the screen, because menu() builds its label array once and
+# redraws that same array on every keypress. m_timeout now has its own loop and
+# re-reads the setting each redraw. Feed a selection then Back, and inspect the
+# SECOND screen: the marker must already have moved.
+CONF2="$WORK/conf2"
+printf '5\n' > "$CONF2"
+CZ_STANDBY_CONF="$CONF2" LC_ALL=C.UTF-8 bash -c '
+    clear(){ :; }; bat(){ printf 85%%; }; bl(){ printf 60; }; blm(){ printf 100; }
+    vol(){ printf 40%%; }; temp(){ printf 45.0C; }
+    source "'"$WORK/fn.sh"'" 2>/dev/null
+    printf "4\n0\n" | m_timeout
+' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' > "$WORK/to.txt"
+# Split on the top border: screen 1 is the first ╔ block, screen 2 the second.
+awk '/╔/{n++} n==1' "$WORK/to.txt" > "$WORK/to1.txt"
+awk '/╔/{n++} n==2' "$WORK/to.txt" > "$WORK/to2.txt"
+[ -s "$WORK/to2.txt" ] && ok "selecting a value redraws the screen in place" \
+    || bad "no second screen was drawn - the picker did not refresh"
+grep -qF '5 min  (current)' "$WORK/to1.txt" \
+    && ok "first screen marks the stored value (5 min)" \
+    || bad "first screen does not mark 5 min as current"
+grep -qF '30 min  (current)' "$WORK/to2.txt" \
+    && ok "second screen already marks the newly selected 30 min" \
+    || bad "marker did not move to 30 min: [$(grep -F 'min' "$WORK/to2.txt" | tr -s ' ' | tr '\n' ';')]"
+grep -qF '5 min  (current)' "$WORK/to2.txt" \
+    && bad "the stale marker is still on 5 min" \
+    || ok "the stale marker is gone from 5 min"
+eq "the selection was persisted to the config" "30" "$(cat "$CONF2")"
+# Row numbers map through the choice list, they are not the minute values: row 4
+# is 30 minutes, not 4.
+grep -qF '1 min' "$WORK/to2.txt" && grep -qF '10 min' "$WORK/to2.txt" \
+    && ok "all four choices are listed" || bad "a choice is missing from the picker"
 
 echo
 echo "=== the reads use IFS= so TAB survives ==="
@@ -155,11 +218,12 @@ withifs=$(printf '\t' | { IFS= read -r -n1 -s c; printf '%s' "${#c}"; })
 [ "$plain" = 0 ] && [ "$withifs" = 1 ] \
    && ok "confirmed: plain read loses TAB (len 0), IFS= read keeps it (len 1)" \
    || bad "TAB-preservation assumption changed: plain=$plain IFS=$withifs"
-awk '/^do_standby\(\) \{/,/^\}/' "$MT" | grep -c 'IFS= read' | {
-    read -r c
-    [ "$c" -ge 3 ] && echo "PASS: all three do_standby reads use IFS=" \
-        || { echo "FAIL: only $c of 3 do_standby reads use IFS="; exit 1; }
-} || fail=1
+ds_body=$(awk '/^do_standby\(\) \{/,/^\}/' "$MT" | sed 's/#.*//')
+# Strip comments first: the prose in do_standby says "read" three times, and
+# counting those would compare 8 against 5 and fail on a correct function.
+eq "every read in do_standby uses IFS=" \
+   "$(printf '%s\n' "$ds_body" | grep -cE '\bread\b')" \
+   "$(printf '%s\n' "$ds_body" | grep -c 'IFS= read')"
 
 echo
 echo "=== standby notice layout ==="
@@ -197,14 +261,16 @@ done
 grep -q 'for m in $CZ_STANDBY_CHOICES' "$MT" \
     && ok "m_timeout builds its rows from CZ_STANDBY_CHOICES, not a hardcoded list" \
     || bad "m_timeout does not iterate CZ_STANDBY_CHOICES"
-eq "both idle reads use cz_standby_seconds" "2" \
+eq "every idle read site uses cz_standby_seconds" "4" \
    "$(grep -c 'secs=$(cz_standby_seconds)' "$MT")"
-eq "both idle reads use read -t" "2" \
+eq "every idle read site uses read -t" "5" \
    "$(grep -c 'IFS= read -t "$secs" -r -n1 -s k' "$MT")"
 # Count, do not grep -q: there are two idle reads (menu and the main loop) and a
 # mutation that fixes the comparison in only one of them still satisfies a
 # presence check. Verified - that is exactly how M5 slipped through first time.
-eq "both idle reads distinguish timeout from EOF via rc>128" "2" \
+# Count, do not grep -q, and re-measure after any change: the guard now appears
+# in do_standby (2), m_timeout, menu and the main loop.
+eq "every idle read distinguishes timeout from EOF via rc>128" "5" \
    "$(grep -c 'rc" -gt 128' "$MT")"
 grep -q 'STANDBY_TO_MAIN' "$MT" && ok "a submenu standby unwinds to the main menu" \
     || bad "no unwind-to-main-menu flag"
