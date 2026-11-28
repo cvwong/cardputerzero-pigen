@@ -83,9 +83,9 @@ case "$out" in *"blank after unblank="*) ok "logs blank state after unblanking" 
 
 echo "=== trap fires on TERM too, not just normal exit ==="
 : > "$CZ_TEST_CALLS"
-# Make the splash actually linger: systemctl reports user-sessions inactive, so
-# the wait loop runs until MAX. The test's own sleep must be the real one, since
-# $MOCK/sleep is a no-op stub.
+# Make the splash actually linger: the mocked systemctl exits 1, so the wait
+# unit reports inactive and the loop runs until MAX. The test's own sleep must be
+# the real one, since $MOCK/sleep is a no-op stub.
 printf '#!/bin/sh\nexit 1\n' > "$MOCK/systemctl"
 export CZ_SPLASH_MAX=3 CZ_SPLASH_MIN=0
 bash "$CZ" >/dev/null 2>&1 &
@@ -144,6 +144,38 @@ echo "=== an explicit CZ_SPLASH_FB still overrides detection ==="
 out=$(CZ_SPLASH_FB="$WORK/fb0" bash "$CZ" 2>&1)
 case "$out" in *"panel=$WORK/fb0"*) ok "CZ_SPLASH_FB override is honoured" ;;
     *) bad "override ignored: $out" ;; esac
+
+echo "=== the splash must not gate the login prompt on the network ==="
+# Boot-time defect measured on the 8e0ee1a card: cz-splash waited on
+# systemd-user-sessions.service, which is After=network.target, so a cosmetic
+# logo held getty@tty1 for ~6.7s of NetworkManager's wifi+DHCP cycle and the
+# login prompt did not appear until ~25.4s. The wait unit is now local.
+# Strip comments before grepping: the block above the WAIT_UNIT default explains
+# the old network-gated behaviour and therefore names systemd-user-sessions in
+# prose, which a plain grep flags as the defect it is documenting.
+grep -v '^[[:space:]]*#' "$CZ" | grep -q 'systemd-user-sessions' \
+    && bad "cz-splash still waits on systemd-user-sessions (network-gated)" \
+    || ok "cz-splash no longer waits on systemd-user-sessions in code"
+grep -qE '^WAIT_UNIT=\$\{CZ_SPLASH_WAIT_UNIT:-systemd-logind\.service\}' "$CZ" \
+    && ok "waits on systemd-logind.service by default, overridable" \
+    || bad "WAIT_UNIT default is not systemd-logind.service"
+grep -q 'is-active --quiet "$WAIT_UNIT"' "$CZ" \
+    && ok "the wait loop actually consults WAIT_UNIT" \
+    || bad "the wait loop does not use WAIT_UNIT"
+grep -qE '^MIN_SHOW=\$\{CZ_SPLASH_MIN:-1\}' "$CZ" \
+    && ok "MIN_SHOW defaults to 1s (was 3s)" || bad "MIN_SHOW default is not 1"
+
+# Behavioural: with the wait unit reporting active, the splash must hand over
+# promptly instead of running to MAX_WAIT. Uses a real 30s ceiling so a broken
+# loop would hang the test rather than pass it.
+printf '#!/bin/sh\nexit 0\n' > "$MOCK/systemctl"
+export CZ_SPLASH_SYSFS="$SYS" CZ_SPLASH_MAX=30 CZ_SPLASH_MIN=0
+t0=$(date +%s)
+bash "$CZ" >/dev/null 2>&1
+t1=$(date +%s)
+el=$((t1 - t0))
+[ "$el" -lt 5 ] && ok "splash handed over in ${el}s with the wait unit active (MAX was 30)" \
+    || bad "splash took ${el}s despite the wait unit being active"
 
 echo
 if [ "$fail" = 0 ]; then echo "CZ-SPLASH-UNBLANK OK"; else echo "CZ-SPLASH-UNBLANK PROBLEM"; exit 1; fi

@@ -69,6 +69,22 @@ on_chroot << 'CHROOT'
 systemctl disable cz-cage-watcher.service seatd.service 2>/dev/null || true
 apt-get purge -y cage foot seatd
 CHROOT
+
+# Boot-time pruning of two units that are provably no-ops on this hardware,
+# each verified on the 8e0ee1a card rather than assumed:
+#   rpi-eeprom-update  logs "Device does not have a Raspberry Pi bootloader
+#                      EEPROM (e.g. Pi 4 or Pi 5). Skipping bootloader update."
+#   e2scrub_reap       reaps LVM snapshots; `vgs` reports 0 volume groups.
+# Deliberately NOT disabled, despite being candidates on paper:
+#   bluetooth      - two working adapters (hci0, hci1); the "Failed to set
+#                    mode: Failed (0x03)" lines are benign, not dead hardware.
+#   sshswitch      - ssh.service is enabled by its own symlink in the image and
+#                    /boot/ssh is absent, so this unit currently no-ops, but it
+#                    is the documented way to turn SSH on from the boot
+#                    partition and 0.63s is not worth losing that.
+on_chroot << 'CHROOT'
+systemctl disable rpi-eeprom-update.service e2scrub_reap.service 2>/dev/null || true
+CHROOT
 # Cached rootfses keep files from earlier builds; the frozen-frame monitor
 # stack was retired in 0494215 and the compositor that replaced it is retired
 # here, so remove both explicitly along with their enable symlinks.

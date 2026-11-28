@@ -33,8 +33,17 @@ FB=${CZ_SPLASH_FB:-$(panel_fb)}
 IMG=${CZ_SPLASH_IMG:-/usr/share/cz/cz-splash.rgb565}
 PING=${CZ_SPLASH_PING:-/usr/share/cz/cz-ping.wav}
 CZ_FONT=${CZ_FONT:-/usr/share/consolefonts/Lat15-Terminus12x6.psf.gz}
-MIN_SHOW=${CZ_SPLASH_MIN:-3}
+MIN_SHOW=${CZ_SPLASH_MIN:-1}
 MAX_WAIT=${CZ_SPLASH_MAX:-15}
+# What the splash waits for before handing over to getty. This used to be
+# systemd-user-sessions.service, which is After=network.target - so a cosmetic
+# boot logo was gated on wifi association and DHCP. Measured on the 8e0ee1a
+# card: NetworkManager became active at 23.6s, network.target at 23.6s,
+# user-sessions at 23.75s, and cz-splash therefore burned ~6.7s of its 8.4s
+# total waiting on the network, pushing the login prompt to ~25.4s.
+# systemd-logind is local, session-related and already up by the time this runs,
+# so the splash now costs roughly MIN_SHOW plus the blit and the ping.
+WAIT_UNIT=${CZ_SPLASH_WAIT_UNIT:-systemd-logind.service}
 
 vtmode() {
   python3 -c 'import os,fcntl,sys
@@ -97,7 +106,7 @@ aplay -q "$PING" || echo "cz-splash: aplay rc=$? cards=$(tr '\n' ';' </proc/asou
 while :; do
     el=$(( $(date +%s) - start ))
     [ "$el" -ge "$MAX_WAIT" ] && break
-    if [ "$el" -ge "$MIN_SHOW" ] && systemctl is-active --quiet systemd-user-sessions.service; then
+    if [ "$el" -ge "$MIN_SHOW" ] && systemctl is-active --quiet "$WAIT_UNIT"; then
         break
     fi
     sleep 0.2
