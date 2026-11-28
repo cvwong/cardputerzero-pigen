@@ -9,6 +9,74 @@ CZ_THEME="${CZ_THEME:-/usr/local/lib/cz-theme.sh}"
 . "$CZ_THEME"
 cz_palette
 
+# Idle screen-blank. Resolved next to cz-theme.sh: both live in /usr/local/lib
+# installed, and side by side in the source tree.
+CZ_STANDBY="${CZ_STANDBY:-$(dirname "${BASH_SOURCE[0]}")/cz-standby.sh}"
+[ -r "$CZ_STANDBY" ] || CZ_STANDBY=/usr/local/lib/cz-standby.sh
+[ -r "$CZ_STANDBY" ] || { echo "cz-menu-theme: cannot read cz-standby.sh" >&2; exit 1; }
+. "$CZ_STANDBY"
+
+TAB=$'\t'   # literal tab; only `IFS= read -n1` preserves it (see do_standby)
+STANDBY_TO_MAIN=""   # set by do_standby in a submenu; unwinds to the main screen
+
+# The standby notice: the shared 53-column box, so it reads as part of the same
+# product rather than a separate screensaver. 10 rows, inside the 14-row budget.
+standby_screen() {
+    local t="S T A N D   B Y" h="press TAB, then ENTER to resume"
+    local len l r
+    clear
+    btop
+    title_row_sig "CARDPUTER ZERO"
+    bsep
+    brow "" ""
+    brow "" ""
+    len=${#t}; l=$(( (51 - len) / 2 )); r=$(( 51 - len - l ))
+    brow "$(sp "$l")$t$(sp "$r")" "$(sp "$l")$TITLE$t$R$(sp "$r")"
+    brow "" ""
+    len=${#h}; l=$(( (51 - len) / 2 )); r=$(( 51 - len - l ))
+    brow "$(sp "$l")$h$(sp "$r")" "$(sp "$l")$DIM$h$R$(sp "$r")"
+    brow "" ""
+    bbot
+}
+
+# Entered when the menu has been idle for the configured timeout. The panel is
+# blanked; ANY key wakes it and shows the notice, but does not resume - resuming
+# needs TAB followed by ENTER, so a key pressed in a pocket or a brushing finger
+# cannot silently drop the user back into the menu.
+#
+# Every read here uses `IFS=`: without it bash strips TAB as IFS whitespace and
+# it arrives as an empty string, indistinguishable from ENTER, which would make
+# a bare ENTER resume. Measured, not assumed.
+do_standby() {
+    local k
+    cz_standby_blank
+    # Any key wakes the panel. On a tty this blocks until then; the || guards
+    # keep a closed stdin from spinning, since read returns empty on EOF and an
+    # empty string is neither TAB nor a wake key.
+    IFS= read -r -n1 -s k || { cz_standby_wake; return 0; }
+    cz_standby_wake
+    standby_screen
+    while :; do
+        IFS= read -r -n1 -s k || return 0
+        [ "$k" = "$TAB" ] || continue
+        IFS= read -r -n1 -s k || return 0
+        [ -z "$k" ] && return 0    # TAB then ENTER resumes
+    done
+}
+
+# Screen-timeout picker. The current setting is marked in place; writing goes
+# through cz_standby_set_minutes, which rejects anything not on the list.
+m_timeout() {
+    local cur m label
+    cur=$(cz_standby_minutes)
+    local -a args=()
+    for m in $CZ_STANDBY_CHOICES; do
+        if [ "$m" = "$cur" ]; then label="$m min  (current)"; else label="$m min"; fi
+        args+=("$label" "!cz_standby_set_minutes $m")
+    done
+    menu "SCREEN TIMEOUT" system "${args[@]}"
+}
+
 m_hostname() {
     local cur new lbl hint plain colored gap YEL
     YEL=$'\e[93m'
@@ -65,6 +133,9 @@ menu() {
         labels+=("$1"); cmds+=("$2"); shift 2
     done
     while :; do
+        # A standby deeper in the nesting resumes at the MAIN menu, not one level
+        # up, so unwind all the way out instead of redrawing this submenu.
+        [ -n "$STANDBY_TO_MAIN" ] && { STANDBY_TO_MAIN=""; return; }
         hdr "$title" "$mode"
         local i
         for i in "${!labels[@]}"; do
@@ -75,7 +146,12 @@ menu() {
             brow "  $MENU_MSG" "${DIM}  $MENU_MSG${R}"
         fi
         bbot
-        read -r -n1 -s k
+        # read -t exits >128 on timeout but 1 on EOF, so the two are separable.
+        local secs rc
+        secs=$(cz_standby_seconds)
+        if [ "$secs" -gt 0 ]; then IFS= read -t "$secs" -r -n1 -s k; rc=$?
+        else IFS= read -r -n1 -s k; rc=$?; fi
+        if [ "$rc" -gt 128 ]; then do_standby; STANDBY_TO_MAIN=1; return; fi
         [ "$k" = 0 ] && return
         if [[ "$k" =~ ^[1-9]$ ]] && [ "$k" -le "${#cmds[@]}" ]; then
             local cmd="${cmds[$((k-1))]}"
@@ -141,6 +217,7 @@ m_system() {
     menu SYSTEM system \
       "Audio"         '!m_audio' \
       "Display"       '!m_display' \
+      "Screen timeout" '!m_timeout' \
       "Hostname"        'm_hostname' \
       "Power"         '!m_power'
 }
@@ -190,8 +267,12 @@ main_screen() {
 }
 
 while :; do
+    STANDBY_TO_MAIN=""
     main_screen
-    read -r -n1 -s k
+    secs=$(cz_standby_seconds)
+    if [ "$secs" -gt 0 ]; then IFS= read -t "$secs" -r -n1 -s k; rc=$?
+    else IFS= read -r -n1 -s k; rc=$?; fi
+    if [ "$rc" -gt 128 ]; then do_standby; continue; fi
     case "$k" in
       1) if cz-camera-present; then need camera_app && cz-camera; else echo "No camera detected"; sleep 2; fi ;;
       2) need cmus && cmus ;;

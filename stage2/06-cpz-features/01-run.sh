@@ -42,8 +42,10 @@ install -D -m 0644 files/asound.conf "${ROOTFS_DIR}/etc/asound.conf"
 # Shared 53x14 theme (palette, box drawing, hdr/row helpers) sourced by both
 # cz-menu-theme, cz-record and cz-files, so it must be in place before they run.
 # cz-signal.sh holds the WiFi bar scale and is sourced by the theme and cz-wifi,
-# so it must sit next to them in /usr/local/lib.
+# so it must sit next to them in /usr/local/lib. cz-standby.sh holds the idle
+# screen-blank helpers and is sourced by cz-menu-theme, same requirement.
 install -D -m 0644 files/cz-signal.sh "${ROOTFS_DIR}/usr/local/lib/cz-signal.sh"
+install -D -m 0644 files/cz-standby.sh "${ROOTFS_DIR}/usr/local/lib/cz-standby.sh"
 install -D -m 0644 files/cz-theme.sh  "${ROOTFS_DIR}/usr/local/lib/cz-theme.sh"
 install -D -m 0755 files/cz-menu "${ROOTFS_DIR}/usr/local/bin/cz-menu"
 install -D -m 0755 files/cz-menu-theme "${ROOTFS_DIR}/usr/local/bin/cz-menu-theme"

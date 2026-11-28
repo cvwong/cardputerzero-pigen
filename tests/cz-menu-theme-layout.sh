@@ -10,8 +10,13 @@ SRC="$HERE/../stage2/06-cpz-features/files/cz-menu-theme"
 # exist on a dev machine, so point it at the copy in the source tree.
 export CZ_THEME="$HERE/../stage2/06-cpz-features/files/cz-theme.sh"
 export CZ_SIGNAL="$HERE/../stage2/06-cpz-features/files/cz-signal.sh"
+export CZ_STANDBY="$HERE/../stage2/06-cpz-features/files/cz-standby.sh"
 [ -r "$CZ_THEME" ] || { echo "missing $CZ_THEME"; exit 1; }
 [ -r "$CZ_SIGNAL" ] || { echo "missing $CZ_SIGNAL"; exit 1; }
+[ -r "$CZ_STANDBY" ] || { echo "missing $CZ_STANDBY"; exit 1; }
+# Pin the standby config to a path that does not exist, so the idle timeout is
+# the 5-minute default whatever happens to be in the developer's own $HOME.
+export CZ_STANDBY_CONF="$HERE/../.cz-standby.conf.does-not-exist"
 FUNCS="$(mktemp)"
 WIRELESS="$(mktemp)"
 WIRELESS_NONE="$(mktemp)"
