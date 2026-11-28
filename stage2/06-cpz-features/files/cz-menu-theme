@@ -58,8 +58,13 @@ do_standby() {
         # from spinning, since read returns empty on EOF and an empty string is
         # neither TAB nor a wake key.
         IFS= read -r -n1 -s k || { cz_standby_wake; return 0; }
-        cz_standby_wake
+        # Three phases, not one: unblank while the backlight is still 0, repaint
+        # the notice, then bring the light up. Waking fully before the repaint
+        # flashed the pre-idle screen for a frame, because the framebuffer still
+        # held it - reported from hardware after the first deploy.
+        cz_standby_unblank
         standby_screen
+        cz_standby_backlight_on
         # The notice is itself an idle surface. Waking it and then walking away
         # without resuming must re-blank rather than hold the backlight on
         # forever, so it gets the same timeout as the menu - one setting governs

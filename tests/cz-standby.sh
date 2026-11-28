@@ -116,25 +116,51 @@ head -n $((n-1)) "$MT" > "$WORK/fn.sh"
 
 # Harness: stub the hardware and the screen, shadow `read` to count calls.
 READLOG="$WORK/reads"
-gate() { # gate <escape-sequence> -> prints "<rc> <reads> <blanks> <wakes> <screens>"
-    # %b, and the caller passes the escapes unevaluated: $(printf 'x\\t\\n')
+gate() { # gate <escape-sequence> -> "<rc> <reads> <blanks> <unblanks> <screens>"
+    # %b, and the caller passes the escapes unevaluated: command substitution
     # would strip the trailing newline and the case would end on EOF instead.
     printf '%b' "$1" | bash -c '
         READLOG="'"$READLOG"'"; CALLS="'"$WORK/calls"'"
         : > "$READLOG"; : > "$CALLS"
         read() { printf x >> "$READLOG"; builtin read "$@"; }
-        cz_standby_blank() { printf blank >> "$CALLS"; }
-        cz_standby_wake()  { printf wake  >> "$CALLS"; }
-        standby_screen()   { printf screen >> "$CALLS"; }
+        cz_standby_blank()        { printf "blank\n"   >> "$CALLS"; }
+        cz_standby_unblank()      { printf "unblank\n" >> "$CALLS"; }
+        cz_standby_backlight_on() { printf "light\n"   >> "$CALLS"; }
+        cz_standby_wake()         { printf "wake\n"    >> "$CALLS"; }
+        standby_screen()          { printf "screen\n"  >> "$CALLS"; }
         TAB=$(printf "\t")
         source "'"$WORK/fn.sh"'" 2>/dev/null
-        cz_standby_blank() { printf blank >> "$CALLS"; }
-        cz_standby_wake()  { printf wake  >> "$CALLS"; }
-        standby_screen()   { printf screen >> "$CALLS"; }
+        cz_standby_blank()        { printf "blank\n"   >> "$CALLS"; }
+        cz_standby_unblank()      { printf "unblank\n" >> "$CALLS"; }
+        cz_standby_backlight_on() { printf "light\n"   >> "$CALLS"; }
+        cz_standby_wake()         { printf "wake\n"    >> "$CALLS"; }
+        standby_screen()          { printf "screen\n"  >> "$CALLS"; }
         do_standby; rc=$?
         printf "%s %s %s %s %s\n" "$rc" "$(wc -c < "$READLOG")" \
-            "$(grep -o blank "$CALLS" | wc -l)" "$(grep -o wake "$CALLS" | wc -l)" \
-            "$(grep -o screen "$CALLS" | wc -l)"
+            "$(grep -cx blank "$CALLS")" "$(grep -cx unblank "$CALLS")" \
+            "$(grep -cx screen "$CALLS")"
+    '
+}
+# Same harness, but returns the call ORDER as tokens so the wake sequence can be
+# asserted, not just counted.
+gate_seq() {
+    printf '%b' "$1" | bash -c '
+        CALLS="'"$WORK/seq"'"; : > "$CALLS"
+        read() { builtin read "$@"; }
+        cz_standby_blank()        { printf "blank\n"   >> "$CALLS"; }
+        cz_standby_unblank()      { printf "unblank\n" >> "$CALLS"; }
+        cz_standby_backlight_on() { printf "light\n"   >> "$CALLS"; }
+        cz_standby_wake()         { printf "wake\n"    >> "$CALLS"; }
+        standby_screen()          { printf "screen\n"  >> "$CALLS"; }
+        TAB=$(printf "\t")
+        source "'"$WORK/fn.sh"'" 2>/dev/null
+        cz_standby_blank()        { printf "blank\n"   >> "$CALLS"; }
+        cz_standby_unblank()      { printf "unblank\n" >> "$CALLS"; }
+        cz_standby_backlight_on() { printf "light\n"   >> "$CALLS"; }
+        cz_standby_wake()         { printf "wake\n"    >> "$CALLS"; }
+        standby_screen()          { printf "screen\n"  >> "$CALLS"; }
+        do_standby >/dev/null 2>&1
+        tr "\n" " " < "$CALLS"
     '
 }
 # x wakes, TAB then ENTER resumes: 3 reads.
@@ -146,7 +172,18 @@ r=$(gate 'x\n\t\n'); eq "ENTER alone does not resume (4 reads, not 2)" "0 4 1 1 
 r=$(gate 'x\tq\t\n'); eq "TAB then a non-ENTER key does not resume" "0 5 1 1 1" "$r"
 # The panel is blanked exactly once and woken exactly once per standby.
 r=$(gate 'x\t\n')
-eq "one blank, one wake, one notice per standby" "0 3 1 1 1" "$r"
+eq "one blank, one unblank, one notice per standby" "0 3 1 1 1" "$r"
+
+echo
+echo "=== wake order: unblank, repaint, THEN backlight (the anti-flash fix) ==="
+# Reported from hardware: waking fully before the repaint showed the pre-idle
+# screen for a frame, because the framebuffer still held it. The backlight must
+# come up only after standby_screen has run, while the panel is still dark.
+seq=$(gate_seq 'x\t\n' | sed 's/ *$//')
+eq "call order is blank, unblank, screen, light" "blank unblank screen light" "$seq"
+[ "$seq" != "blank unblank light screen" ] \
+    && ok "the assertion distinguishes the buggy light-before-screen order" \
+    || bad "the order assertion cannot distinguish the buggy sequence"
 
 echo
 echo "=== the STAND BY notice re-blanks if the user walks away again ==="
@@ -160,15 +197,24 @@ CALLS2="$WORK/calls2"
 gate_slow() {
     { printf 'x'; sleep 2.5; printf '\t\n'; } | bash -c '
         CALLS="'"$CALLS2"'"; : > "$CALLS"
+        read() { builtin read "$@"; }
+        cz_standby_blank()        { printf "blank\n"   >> "$CALLS"; }
+        cz_standby_unblank()      { printf "unblank\n" >> "$CALLS"; }
+        cz_standby_backlight_on() { printf "light\n"   >> "$CALLS"; }
+        cz_standby_wake()         { printf "wake\n"    >> "$CALLS"; }
+        standby_screen()          { printf "screen\n"  >> "$CALLS"; }
+        cz_standby_seconds() { printf 1; }
         TAB=$(printf "\t")
         source "'"$WORK/fn.sh"'" 2>/dev/null
-        cz_standby_blank()   { printf blank  >> "$CALLS"; }
-        cz_standby_wake()    { printf wake   >> "$CALLS"; }
-        standby_screen()     { printf screen >> "$CALLS"; }
+        cz_standby_blank()        { printf "blank\n"   >> "$CALLS"; }
+        cz_standby_unblank()      { printf "unblank\n" >> "$CALLS"; }
+        cz_standby_backlight_on() { printf "light\n"   >> "$CALLS"; }
+        cz_standby_wake()         { printf "wake\n"    >> "$CALLS"; }
+        standby_screen()          { printf "screen\n"  >> "$CALLS"; }
         cz_standby_seconds() { printf 1; }
         do_standby; rc=$?
-        printf "%s %s %s %s\n" "$rc" "$(grep -o blank "$CALLS" | wc -l)" \
-            "$(grep -o wake "$CALLS" | wc -l)" "$(grep -o screen "$CALLS" | wc -l)"
+        printf "%s %s %s %s\n" "$rc" "$(grep -cx blank "$CALLS")" \
+            "$(grep -cx unblank "$CALLS")" "$(grep -cx screen "$CALLS")"
     '
 }
 r=$(gate_slow)

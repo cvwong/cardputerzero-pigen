@@ -90,14 +90,30 @@ cz_standby_blank() {
     return 0
 }
 
-# Wake in the reverse order: FBIOBLANK first, because on panel-mipi-dbid
-# restoring brightness alone does not bring a powered-down panel back.
-cz_standby_wake() {
-    local bl fb
+# Wake, phase 1: unblank the panel but leave the backlight at 0. The panel scans
+# again while emitting no light, so the caller can repaint before anything
+# becomes visible. Doing both phases together flashed the pre-idle screen for a
+# frame, because the framebuffer still held it when the backlight came up.
+cz_standby_unblank() {
+    local fb
     fb="$(cz_panel_fb)" && cz_fb_blank "$fb" 0
+    return 0
+}
+
+# Wake, phase 2: restore the brightness that cz_standby_blank saved.
+cz_standby_backlight_on() {
+    local bl
     bl="$(cz_standby_bl_dir)"
     if [ -n "${CZ_STANDBY_SAVED_BL:-}" ] && [ -w "$bl/brightness" ]; then
         echo "$CZ_STANDBY_SAVED_BL" > "$bl/brightness" 2>/dev/null
     fi
     return 0
+}
+
+# Both phases at once. Correct only where nothing is drawn afterwards, such as
+# an EOF exit back to a menu that repaints itself. A caller that is about to
+# draw must use the two phases separately, with the draw in between.
+cz_standby_wake() {
+    cz_standby_unblank
+    cz_standby_backlight_on
 }
